@@ -275,7 +275,6 @@ export function HomeScreen(props: HomeScreenProps) {
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const insets = useSafeAreaInsets();
   const { fabClearance } = useAndroidControlSizing();
-  const columnMetrics = useNativeColumnLayoutMetrics();
   const screenMetrics = useNativeLayoutMetrics();
   const contentSideInsets = NATIVE_WORKSPACE_COLUMNS_SUPPORTED
     ? (columnMetrics ?? screenMetrics)?.safeArea
