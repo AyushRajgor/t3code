@@ -36,7 +36,10 @@ import type { SavedRemoteConnection } from "../../lib/connection";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import { nativeHeaderScrollEdgeEffects } from "../../native/scrollEdgeEffects";
-import { useNativeColumnLayoutMetrics, useNativeLayoutMetrics } from "../../native/native-layout-metrics";
+import {
+  useNativeColumnLayoutMetrics,
+  useNativeLayoutMetrics,
+} from "../../native/native-layout-metrics";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { NATIVE_WORKSPACE_COLUMNS_SUPPORTED } from "../../native/NativeWorkspaceColumns";
 import { useThreadSearch } from "../../state/queries";
