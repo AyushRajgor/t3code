@@ -20,7 +20,7 @@ import {
   createNativeMailSearchToolbarItem,
   NATIVE_MAIL_SEARCH_TOOLBAR_CONTENT_INSET,
 } from "../layout/native-mail-search-toolbar";
-import { useNativeMailSearchToolbar } from "../layout/use-native-mail-search-toolbar";
+import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
 
 import { getMobileThirdPartyLicenses } from "./mobileThirdPartyLicenses";
 

@@ -12,7 +12,7 @@ import {
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import type { ScreenHeaderMenuItem, ScreenHeaderProps } from "./ScreenHeader.types";
 import type { AppSymbolName } from "./AppSymbol";
-import { useNativeMailSearchToolbar } from "../features/layout/use-native-mail-search-toolbar";
+import { useNativeMailSearchToolbar } from "../native/use-native-mail-search-toolbar";
 
 function iosIcon(icon: AppSymbolName) {
   return typeof icon === "string" ? icon : icon.ios;
