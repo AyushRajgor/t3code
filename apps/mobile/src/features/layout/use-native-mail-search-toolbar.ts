@@ -1,4 +1,4 @@
-import { useNativeLayoutMetrics } from "./native-layout-metrics";
+import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
 import { NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED } from "./native-mail-search-toolbar";
 
 /** The custom horizontal search field yields to UIKit when bars move to a side. */

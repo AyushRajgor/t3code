@@ -6,7 +6,7 @@ import type {
 import { isValidElement, useRef } from "react";
 import { Platform, StyleSheet } from "react-native";
 import { useMobileNavigationTheme } from "../lib/useMobileNavigationTheme";
-import { useNativeLayoutMetrics } from "../features/layout/native-layout-metrics";
+import { useNativeLayoutMetrics } from "../native/native-layout-metrics";
 import {
   SearchBar,
   Stack,

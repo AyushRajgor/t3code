@@ -15,8 +15,7 @@ final class T3LayoutMetricsView: ExpoView {
     }
     #if compiler(>=6.4)
     if #available(iOS 27.1, *) {
-      registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) {
-        (view: T3LayoutMetricsView, _: UITraitCollection) in
+      registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) { (view: T3LayoutMetricsView, _: UITraitCollection) in
         view.publishMetrics()
       }
     }

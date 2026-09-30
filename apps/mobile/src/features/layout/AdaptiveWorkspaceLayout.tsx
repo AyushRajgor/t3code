@@ -66,7 +66,7 @@ import {
   NativeWorkspaceInspectorContext,
 } from "../../native/v5-workspace-context";
 
-import { useNativeLayoutMetrics } from "./native-layout-metrics";
+import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
 
 interface AdaptiveWorkspaceContextValue {
   readonly layout: Layout;
@@ -276,7 +276,9 @@ function AdaptiveWorkspaceLayoutContent(
         viewportWidth: width,
         preferredWidth: fileInspectorPreferredWidth ?? undefined,
         reservedLeadingWidth:
-          shouldRenderPrimarySidebar && showPrimarySidebar ? (layout.listPaneWidth ?? 0) + (layout.listPaneGap ?? 0) : 0,
+          shouldRenderPrimarySidebar && showPrimarySidebar
+            ? (layout.listPaneWidth ?? 0) + (layout.listPaneGap ?? 0)
+            : 0,
       }),
     [fileInspectorPreferredWidth, layout, showPrimarySidebar, shouldRenderPrimarySidebar, width],
   );
@@ -481,9 +483,17 @@ function AdaptiveWorkspaceLayoutContent(
   );
   useEffect(() => {
     if (nativeWorkspace) return;
-    const targetWidth = panes.primarySidebarVisible ? (layout.listPaneWidth ?? 0) + (layout.listPaneGap ?? 0) : 0;
+    const targetWidth = panes.primarySidebarVisible
+      ? (layout.listPaneWidth ?? 0) + (layout.listPaneGap ?? 0)
+      : 0;
     renderedSidebarWidth.value = withTiming(targetWidth, WORKSPACE_PANE_TIMING);
-  }, [nativeWorkspace, layout.listPaneWidth, layout.listPaneGap, panes.primarySidebarVisible, renderedSidebarWidth]);
+  }, [
+    nativeWorkspace,
+    layout.listPaneWidth,
+    layout.listPaneGap,
+    panes.primarySidebarVisible,
+    renderedSidebarWidth,
+  ]);
   const sidebarAnimatedStyle = useAnimatedStyle(() => ({
     opacity: Math.min(1, renderedSidebarWidth.value / 80),
     width: renderedSidebarWidth.value,
