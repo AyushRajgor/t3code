@@ -390,7 +390,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     }
   }, []);
   const windowHeight = useWindowDimensions().height;
-  const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + 44;
+  const navigationHeaderHeight = useContext(HeaderHeightContext) ?? insets.top + 44;
   const [screenMetrics, setScreenMetrics] = useState<NativeLayoutMetrics | null>(null);
   const columnMetrics = useNativeColumnLayoutMetrics();
   const nativeMetrics = NATIVE_WORKSPACE_COLUMNS_SUPPORTED ? columnMetrics : screenMetrics;
