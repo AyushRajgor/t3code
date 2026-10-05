@@ -1013,6 +1013,30 @@ export const BitbucketSettings = Schema.Struct({
 });
 export type BitbucketSettings = typeof BitbucketSettings.Type;
 
+/**
+ * Per-host choices for the GitHub CLI's logins. `account` pins one of the logins
+ * `gh` holds for the host instead of its active one; a disabled host gets no
+ * credential at all. `GH_TOKEN` and friends still win over both, as they do in `gh`.
+ */
+/** A GitHub host name, lowercased on decode so `GitHub.com` and `github.com` are one entry. */
+export const GitHubHost = TrimmedNonEmptyString.pipe(
+  Schema.decodeTo(Schema.String, SchemaTransformation.toLowerCase()),
+);
+
+export const GitHubHostSettings = Schema.Struct({
+  account: Schema.optionalKey(TrimmedNonEmptyString),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type GitHubHostSettings = typeof GitHubHostSettings.Type;
+
+export const GitHubSettings = Schema.Struct({
+  /** Keyed by lowercased host, for example `github.com`. */
+  hosts: Schema.Record(GitHubHost, GitHubHostSettings).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+});
+export type GitHubSettings = typeof GitHubSettings.Type;
+
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -1423,6 +1447,7 @@ export const ServerSettings = Schema.Struct({
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   bitbucket: BitbucketSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  github: GitHubSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
@@ -1712,6 +1737,12 @@ export const ServerSettingsPatch = Schema.Struct({
       email: Schema.optionalKey(TrimmedString),
       accessToken: Schema.optionalKey(TrimmedString),
       apiToken: Schema.optionalKey(TrimmedString),
+    }),
+  ),
+  /** `hosts` replaces the whole map, so an omitted host or account clears it. */
+  github: Schema.optionalKey(
+    Schema.Struct({
+      hosts: Schema.optionalKey(Schema.Record(GitHubHost, GitHubHostSettings)),
     }),
   ),
   providers: Schema.optionalKey(
