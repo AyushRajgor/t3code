@@ -17,6 +17,10 @@ Install [GitHub CLI](https://cli.github.com/) 2.81.0 or newer, then sign in:
 gh auth login
 ```
 
+If `gh` is signed in to several accounts or hosts, open **Settings → Source Control**, expand
+**GitHub**, and pick the account each host uses or turn a host off. A `GH_TOKEN` (or
+`GH_ENTERPRISE_TOKEN`) set on the server still takes precedence over that choice.
+
 ### Forgejo and Gitea
 
 Install [Forgejo CLI (`fj`)](https://codeberg.org/forgejo-contrib/forgejo-cli) or

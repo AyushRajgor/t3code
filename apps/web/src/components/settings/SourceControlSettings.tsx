@@ -57,6 +57,7 @@ import {
   type Icon,
 } from "../Icons";
 import { BitbucketCredentialsSettings } from "./BitbucketCredentialsSettings";
+import { GitHubAccountSettings } from "./GitHubAccountSettings";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SourceControlWritingSettingsSection } from "./SourceControlWritingSettings";
 import {
@@ -222,6 +223,9 @@ function itemSummary({
 
   if (auth) {
     if (auth.status === "authenticated") {
+      // The server names the account its requests use, Settings choice included, and
+      // says when an environment token overrides it.
+      const authDetail = optionLabel(auth.detail);
       return (
         <>
           <span>Authenticated</span>
@@ -231,6 +235,7 @@ function itemSummary({
               <RedactedAccount account={authAccount} />
             </>
           ) : null}
+          {authDetail ? <span>· {authDetail}</span> : null}
         </>
       );
     }
@@ -283,7 +288,8 @@ function DiscoveryItemRow({
     if (
       (item.kind === "git" && searchTargetId === searchableSetting("git-fetch-interval").id) ||
       (item.kind === "bitbucket" &&
-        searchTargetId === searchableSetting("bitbucket-credentials").id)
+        searchTargetId === searchableSetting("bitbucket-credentials").id) ||
+      (item.kind === "github" && searchTargetId === searchableSetting("github-accounts").id)
     ) {
       setIsExpanded(true);
     }
@@ -600,6 +606,15 @@ export function SourceControlSettingsPanel() {
                         // Drafts belong to one environment; switching must not carry them over.
                         key={environmentId}
                         environmentId={environmentId}
+                        onSaved={handleScan}
+                      />
+                    </SettingsSearchTarget>
+                  ) : item.kind === "github" && item.status === "available" ? (
+                    <SettingsSearchTarget id={searchableSetting("github-accounts").id}>
+                      <GitHubAccountSettings
+                        key={environmentId}
+                        environmentId={environmentId}
+                        auth={item.auth}
                         onSaved={handleScan}
                       />
                     </SettingsSearchTarget>
