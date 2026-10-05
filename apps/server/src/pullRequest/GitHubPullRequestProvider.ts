@@ -109,6 +109,7 @@ export function gitHubProviderFailure(
     case "GitHubCliMissingError":
       return { reason: "missing-tool" };
     case "GitHubNotSignedInError":
+    case "GitHubHostDisabledError":
     case "GitHubApiAuthenticationError":
       return { reason: "unauthenticated" };
     case "GitHubApiRateLimitError":

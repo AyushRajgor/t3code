@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 
 import { HostProcessEnvironment, HostProcessWorkingDirectory } from "@t3tools/shared/hostProcess";
 
+import * as ServerSettings from "../serverSettings.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 
 /** How long a token is reused before `gh` is asked again, so a `gh auth switch` applies soon. */
@@ -41,13 +42,25 @@ export class GitHubCliMissingError extends Schema.TaggedError<GitHubCliMissingEr
   }
 }
 
-/** `gh` is installed but holds no login for the host. */
+/** `gh` is installed but holds no login for the host, or not the account chosen in Settings. */
 export class GitHubNotSignedInError extends Schema.TaggedError<GitHubNotSignedInError>()(
   "GitHubNotSignedInError",
+  { host: Schema.String, account: Schema.optional(Schema.String) },
+) {
+  override get message(): string {
+    return this.account === undefined
+      ? `No GitHub credential for ${this.host}: run \`gh auth login --hostname ${this.host}\`.`
+      : `No GitHub credential for ${this.account} on ${this.host}: run \`gh auth login --hostname ${this.host}\` for that account or pick another in Settings → Source Control.`;
+  }
+}
+
+/** The user turned the host off in Settings. */
+export class GitHubHostDisabledError extends Schema.TaggedError<GitHubHostDisabledError>()(
+  "GitHubHostDisabledError",
   { host: Schema.String },
 ) {
   override get message(): string {
-    return `No GitHub credential for ${this.host}: run \`gh auth login --hostname ${this.host}\`.`;
+    return `GitHub host ${this.host} is turned off in Settings → Source Control.`;
   }
 }
 
@@ -65,6 +78,7 @@ export class GitHubCliFailedError extends Schema.TaggedError<GitHubCliFailedErro
 export type GitHubCredentialUnavailableError =
   | GitHubCliMissingError
   | GitHubNotSignedInError
+  | GitHubHostDisabledError
   | GitHubCliFailedError;
 
 /**
@@ -115,6 +129,7 @@ export function environmentToken(
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const process = yield* VcsProcess.VcsProcess;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
   const environment = yield* HostProcessEnvironment;
   const workingDirectory = yield* HostProcessWorkingDirectory;
@@ -127,12 +142,18 @@ export const make = Effect.gen(function* () {
       Effect.orDie,
     );
 
-  const fromGh = (host: string) =>
+  const fromGh = (host: string, account: string | undefined) =>
     process
       .run({
         operation: "GitHubCredentials.get",
         command: "gh",
-        args: ["auth", "token", "--hostname", host],
+        args: [
+          "auth",
+          "token",
+          "--hostname",
+          host,
+          ...(account === undefined ? [] : ["--user", account]),
+        ],
         cwd: workingDirectory,
         // Never let gh print the token into a debug log.
         env: { GH_DEBUG: "", GH_PROMPT_DISABLED: "1" },
@@ -146,19 +167,32 @@ export const make = Effect.gen(function* () {
             ? new GitHubCliMissingError({ host })
             : // gh exits non-zero with "no oauth token" when it has no login for the host.
               error._tag === "VcsProcessExitError"
-              ? new GitHubNotSignedInError({ host })
+              ? new GitHubNotSignedInError({ host, ...(account === undefined ? {} : { account }) })
               : new GitHubCliFailedError({ host, cause: error }),
         ),
         Effect.map((output) => output.stdout.trim()),
         Effect.filterOrFail(
           (token) => token !== "",
-          () => new GitHubNotSignedInError({ host }),
+          () => new GitHubNotSignedInError({ host, ...(account === undefined ? {} : { account }) }),
         ),
       );
 
-  const lookup = Effect.fn("GitHubCredentials.lookup")(function* (host: string) {
+  /** The Settings choice for a host; unreadable settings fall back to gh's own choice. */
+  const hostChoice = (host: string) =>
+    serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.github.hosts[host]),
+      Effect.orElseSucceed(() => undefined),
+    );
+
+  /** Cache key: the host plus its pinned account, so a changed pin misses the cache. */
+  const cacheKey = (host: string, account: string | undefined) =>
+    account === undefined ? host : `${host}\u0000${account}`;
+
+  const lookup = Effect.fn("GitHubCredentials.lookup")(function* (key: string) {
+    const [host = key, choice] = key.split("\u0000");
+    // An environment token wins over a pinned account, exactly as it does in gh.
     const fromEnv = environmentToken(host, environment);
-    const token = fromEnv ?? (yield* fromGh(host));
+    const token = fromEnv ?? (yield* fromGh(host, choice));
     return {
       host,
       token: Redacted.make(token),
@@ -181,8 +215,20 @@ export const make = Effect.gen(function* () {
   });
 
   return GitHubCredentials.of({
-    get: (host) => Cache.get(cache, normalizeHost(host)),
-    invalidate: (host) => Cache.invalidate(cache, normalizeHost(host)),
+    get: Effect.fn("GitHubCredentials.get")(function* (rawHost) {
+      const host = normalizeHost(rawHost);
+      const choice = yield* hostChoice(host);
+      if (choice?.enabled === false) {
+        return yield* new GitHubHostDisabledError({ host });
+      }
+      return yield* Cache.get(cache, cacheKey(host, choice?.account));
+    }),
+    invalidate: (rawHost) => {
+      const host = normalizeHost(rawHost);
+      return hostChoice(host).pipe(
+        Effect.flatMap((choice) => Cache.invalidate(cache, cacheKey(host, choice?.account))),
+      );
+    },
   });
 });
 
