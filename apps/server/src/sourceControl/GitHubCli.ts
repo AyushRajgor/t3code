@@ -617,10 +617,13 @@ export function parsePullRequestReference(
  */
 export function gitHubApiHostForRemote(remoteUrl: string): string | null {
   const provider = detectSourceControlProviderFromRemoteUrl(remoteUrl);
-  if (provider?.kind !== "github") return null;
+  if (provider === null) return null;
   const host = new URL(provider.baseUrl).host.toLowerCase();
-  if (host === "github.com" || host.endsWith(".ghe.com") || host.includes(".")) return host;
-  return isSshRemoteUrl(remoteUrl) ? "github.com" : host;
+  // A dotless SSH host is an alias from ~/.ssh/config, never a real API host.
+  if (isSshRemoteUrl(remoteUrl) && !host.includes(".")) {
+    return host.includes("github") ? "github.com" : null;
+  }
+  return provider.kind === "github" ? host : null;
 }
 
 /** The local branch a pull request checks out into, the way `gh pr checkout` names it. */

@@ -36,6 +36,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as GitHubApi from "../sourceControl/GitHubApi.ts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import { decodeGitHubPullRequestListJson } from "../sourceControl/gitHubPullRequests.ts";
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
@@ -725,6 +726,7 @@ function makeManager(input?: {
         }),
       ),
       Effect.provide(Layer.succeed(GitHubCli.GitHubCli, gitHubCli)),
+      Effect.provide(Layer.mock(GitHubApi.GitHubApi)({})),
     ),
   );
 
@@ -2660,8 +2662,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         provider: "github",
         providerOperation: "listChangeRequests",
         providerCommand: "gh",
-        errorDetail:
-          "GitHub API rate limit exceeded. For the GraphQL quota and reset time, run `gh api graphql -f query='{rateLimit{remaining resetAt}}'`; `gh api rate_limit` reports REST.",
+        errorDetail: "GitHub API rate limit exceeded. Requests resume when the limit resets.",
       });
       const loggedText = [
         warning?.message ?? "",
