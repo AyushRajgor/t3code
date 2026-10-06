@@ -80,7 +80,12 @@ export class GitHubCliCommandError extends Schema.TaggedError<GitHubCliCommandEr
   { ...gitHubCliFailureFields, httpStatus: Schema.optional(Schema.Int) },
 ) {
   override get message(): string {
-    return "GitHub request failed.";
+    // GitHub's own reason ("A pull request already exists…") or the failed step's, when known.
+    const reason =
+      this.cause instanceof Error && this.cause.message.trim() !== ""
+        ? this.cause.message.trim()
+        : null;
+    return reason === null ? "GitHub request failed." : reason;
   }
 }
 
@@ -150,6 +155,8 @@ function fromGitHubApiError(cwd: string, error: GitHubApi.GitHubApiError): GitHu
     case "GitHubNotSignedInError":
     case "GitHubApiAuthenticationError":
       return new GitHubCliAuthenticationError(context);
+    case "GitHubCliFailedError":
+      return new GitHubCliCommandError(context);
     case "GitHubApiRateLimitError":
       return new GitHubCliRateLimitError({
         ...context,
@@ -495,6 +502,12 @@ export function gitHubApiHostForRemote(remoteUrl: string): string | null {
   return provider.kind === "github" ? host : null;
 }
 
+/** A caller's host hint, read the way a remote's host is: a dotless alias is not an API host. */
+function apiHostForHint(host: string): string {
+  const normalized = host.toLowerCase();
+  return !normalized.includes(".") && normalized.includes("github") ? "github.com" : normalized;
+}
+
 /** The local branch a pull request checks out into, the way `gh pr checkout` names it. */
 export function pullRequestCheckoutBranchName(input: {
   readonly headRefName: string;
@@ -562,7 +575,7 @@ export const make = Effect.gen(function* () {
         host: gitHubApiHostForRemote(match[2]!),
       }));
     const host =
-      input.host?.toLowerCase() ??
+      (input.host === undefined ? undefined : apiHostForHint(input.host)) ??
       fetchRemotes.find((remote) => remote.name === "origin" && remote.host !== null)?.host ??
       fetchRemotes.find((remote) => remote.host !== null)?.host ??
       defaultHost;
@@ -872,10 +885,12 @@ export const make = Effect.gen(function* () {
       const known = remoteFor(baseNameWithOwner);
       return known === null ? git.resolvePrimaryRemoteName(input.cwd) : Effect.succeed(known);
     });
+    // A fork's branch named like the base's default branch is checked out under the owner's
+    // prefix. Without the default branch that collision cannot be ruled out, and the checkout
+    // would reset the local default branch to the fork's commit, so it fails instead.
     const defaultBranch = isCrossRepository
       ? yield* readRepository(input.cwd, base).pipe(
           Effect.map((repository) => repository.default_branch ?? null),
-          Effect.orElseSucceed(() => null),
         )
       : null;
     const localBranch = pullRequestCheckoutBranchName({
@@ -943,9 +958,6 @@ export const make = Effect.gen(function* () {
 
     yield* Effect.gen(function* () {
       if (!exists) yield* runGit(input.cwd, "branch", ["branch", localBranch, target.ref]);
-      if (target.upstream !== null) {
-        yield* git.setBranchUpstream({ cwd: input.cwd, branch: localBranch, ...target.upstream });
-      }
       yield* Effect.scoped(git.switchRef({ cwd: input.cwd, refName: localBranch }));
       if (exists) {
         yield* runGit(
@@ -955,6 +967,11 @@ export const make = Effect.gen(function* () {
             ? ["reset", "--hard", "--quiet", target.ref]
             : ["merge", "--ff-only", "--quiet", target.ref],
         );
+      }
+      // Tracking is set once the branch is the pull request's, so a sync that fails leaves an
+      // existing branch's upstream as it was.
+      if (target.upstream !== null) {
+        yield* git.setBranchUpstream({ cwd: input.cwd, branch: localBranch, ...target.upstream });
       }
     }).pipe(Effect.mapError(gitFailure(input.cwd)));
   });
@@ -995,7 +1012,7 @@ export const make = Effect.gen(function* () {
         const viewer = locator === null ? null : yield* readViewerLogin(input.cwd, locator.host);
         const owner = locator?.owner ?? viewer;
         const name = locator?.name ?? input.repository.trim();
-        const host = locator?.host ?? "github.com";
+        const host = locator?.host ?? (environment.GH_HOST?.trim().toLowerCase() || "github.com");
         const isViewer = viewer !== null && owner?.toLowerCase() === viewer.toLowerCase();
         const response = yield* rest(input.cwd, {
           host,
@@ -1027,7 +1044,14 @@ export const make = Effect.gen(function* () {
           method: "POST",
           path: `repos/${encodeURIComponent(locator.owner)}/${encodeURIComponent(locator.name)}/pulls`,
           // `owner:branch` is how the REST API takes a fork's head, the same as `gh --head`.
-          body: { base: input.baseBranch, head: input.headSelector, title: input.title, body },
+          // gh allows maintainer edits unless told otherwise; the API's default is not documented.
+          body: {
+            base: input.baseBranch,
+            head: input.headSelector,
+            title: input.title,
+            body,
+            maintainer_can_modify: true,
+          },
         });
       }),
     getDefaultBranch: (input) =>

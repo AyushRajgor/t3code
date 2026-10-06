@@ -165,11 +165,18 @@ export const makeDiscovery = Effect.gen(function* () {
                 host: "github.com",
                 detail: `Using the token in ${variable} from the server environment.`,
               })
-            : providerAuth({
-                status: "unauthenticated",
-                host: "github.com",
-                detail: `GitHub refused the token in ${variable}. Replace it, or unset it to use \`gh auth login\`.`,
-              }),
+            : Result.isFailure(viewer) && viewer.failure._tag !== "GitHubApiAuthenticationError"
+              ? // Only a refusal says the token is bad; a network error or a pause says nothing.
+                providerAuth({
+                  status: "unknown",
+                  host: "github.com",
+                  detail: `Could not check the token in ${variable}: ${viewer.failure.message}`,
+                })
+              : providerAuth({
+                  status: "unauthenticated",
+                  host: "github.com",
+                  detail: `GitHub refused the token in ${variable}. Replace it, or unset it to use \`gh auth login\`.`,
+                }),
       } satisfies SourceControlProviderDiscoveryItem;
     }),
     refineUnknownRemote: () => Effect.succeed(null),

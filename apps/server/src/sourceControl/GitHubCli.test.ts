@@ -206,7 +206,7 @@ describe("GitHubCli repository resolution", () => {
   it.effect("reads an SSH alias remote through github.com", () => {
     const hosts: string[] = [];
     const { layer } = harness({
-      remotes: remotesOutput(["origin", "git@github-work:acme/web.git"]),
+      remotes: remotesOutput(["origin", "git@github:acme/web.git"]),
       api: {
         rest: (input) =>
           Effect.sync(() => {
@@ -223,7 +223,9 @@ describe("GitHubCli repository resolution", () => {
     return Effect.gen(function* () {
       const gh = yield* GitHubCli.GitHubCli;
       yield* gh.getDefaultBranch({ cwd: "/repo" });
-      assert.deepStrictEqual(hosts, ["github.com repos/acme/web"]);
+      // A provider's host hint for the same alias (`github` here) resolves the same way.
+      yield* gh.getDefaultBranch({ cwd: "/repo", rateLimitHost: "github" });
+      assert.deepStrictEqual(hosts, ["github.com repos/acme/web", "github.com repos/acme/web"]);
       assert.strictEqual(
         GitHubCli.gitHubApiHostForRemote("git@github.example.com:a/b.git"),
         "github.example.com",
@@ -441,6 +443,7 @@ describe("GitHubCli writes", () => {
         head: "me:feature",
         title: "Title",
         body: "Body",
+        maintainer_can_modify: true,
       });
     }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer), Effect.scoped);
   });
@@ -508,12 +511,39 @@ describe("GitHubCli.checkoutPullRequest", () => {
           { cwd: "/repo", remoteName: "origin", remoteBranch: "feature/x" },
         ],
         ["execute", ["branch", "feature/x", "refs/remotes/origin/feature/x"]],
+        ["switchRef", { cwd: "/repo", refName: "feature/x" }],
         [
           "setBranchUpstream",
           { cwd: "/repo", branch: "feature/x", remoteName: "origin", remoteBranch: "feature/x" },
         ],
-        ["switchRef", { cwd: "/repo", refName: "feature/x" }],
       ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses a fork checkout when the base's default branch cannot be read", () => {
+    const { layer, git } = harness({
+      remotes: remotesOutput(["origin", "git@github.com:acme/web.git"]),
+      localBranches: ["main"],
+      api: {
+        graphql: () =>
+          Effect.succeed(
+            encodeJson({ data: { repository: { pullRequest: node(6, "main", "someone") } } }),
+          ),
+        rest: () =>
+          Effect.fail(
+            new GitHubApi.GitHubApiRequestError({
+              host: "github.com",
+              operation: "x",
+              cause: "offline",
+            }),
+          ),
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubCli.GitHubCli;
+      yield* Effect.flip(gh.checkoutPullRequest({ cwd: "/repo", reference: "6", force: true }));
+      // Nothing touched the local branches: `main` must not be reset to the fork's commit.
+      assert.deepStrictEqual(git, []);
     }).pipe(Effect.provide(layer));
   });
 
@@ -542,12 +572,12 @@ describe("GitHubCli.checkoutPullRequest", () => {
           "fetchRemoteTrackingBranch",
           { cwd: "/repo", remoteName: "someone", remoteBranch: "main" },
         ],
+        ["switchRef", { cwd: "/repo", refName: "someone/main" }],
+        ["execute", ["reset", "--hard", "--quiet", "refs/remotes/someone/main"]],
         [
           "setBranchUpstream",
           { cwd: "/repo", branch: "someone/main", remoteName: "someone", remoteBranch: "main" },
         ],
-        ["switchRef", { cwd: "/repo", refName: "someone/main" }],
-        ["execute", ["reset", "--hard", "--quiet", "refs/remotes/someone/main"]],
       ]);
     }).pipe(Effect.provide(layer));
   });
