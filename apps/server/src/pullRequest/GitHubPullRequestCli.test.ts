@@ -359,6 +359,61 @@ function restCallsTo(needle: string): ReadonlyArray<GitHubApi.GitHubRestInput> {
 /** A pull request's base and head, as the REST read a file expansion starts from answers them. */
 const pullRequestRefs = encodeJson({ base: { sha: "a1b2c3d" }, head: { sha: "b1c2d3e" } });
 
+/** A cross-repository pull request whose head waits on a maintainer to run its workflows. */
+const crossRepositoryDetail = (headRefOid = "abc123") =>
+  coreResponse({
+    headRefName: "feat/page",
+    headRefOid,
+    isCrossRepository: true,
+    headRepositoryOwner: { login: "octocat" },
+  });
+
+/** Open pull requests on one head branch, every one of them from the same fork head. */
+const heads = (numbers: ReadonlyArray<number>) => ({
+  data: {
+    repository: {
+      pullRequests: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: numbers.map((number) => ({
+          number,
+          headRefOid: "abc123",
+          isCrossRepository: true,
+          headRepositoryOwner: { login: "octocat" },
+        })),
+      },
+    },
+  },
+});
+
+const workflowRuns = (ids: ReadonlyArray<number>) => ({
+  workflow_runs: ids.map((id) => ({
+    id,
+    name: id === 10 ? "build" : `run ${id}`,
+    html_url: `https://example.com/${id}`,
+  })),
+});
+
+/** Answers the reads an approval makes: the detail, the heads, the runs; approvals return nothing. */
+function workflowApprovalRoutes(
+  detail: () => unknown,
+  headsAnswer: unknown,
+  runsAnswer: unknown,
+): void {
+  mockedExecute.mockImplementation((call) =>
+    Effect.sync(() =>
+      output(
+        call.kind === "rest"
+          ? call.path.endsWith("/approve")
+            ? ""
+            : encodeJson(runsAnswer)
+          : call.query.includes("headRefName: $head")
+            ? encodeJson(headsAnswer)
+            : encodeJson(detail()),
+      ),
+    ),
+  );
+}
+
 /** The pull request node id lookup, which the layer caches for every test after the first. */
 const NODE_ID_QUERY = "pullRequest(number: $number) { id }";
 const nodeIdAnswer = (id: string) => ({ data: { repository: { pullRequest: { id } } } });
@@ -2370,58 +2425,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("finds and approves every workflow waiting on a maintainer", () =>
+  it.effect("finds and approves every workflow waiting on a maintainer", () =>
     Effect.gen(function* () {
-      const detail = output(
-        encodeJson(
-          coreResponse({
-            number: 7,
-            title: "Pull request 7",
-            url: "https://github.com/acme/web/pull/7",
-            headRefName: "feat/page",
-            headRefOid: "abc123",
-            isCrossRepository: true,
-            headRepositoryOwner: { login: "octocat" },
-            baseRefName: "main",
-            createdAt: "2026-07-01T00:00:00Z",
-            updatedAt: "2026-07-02T00:00:00Z",
-          }),
-        ),
-      );
-      const heads = output(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off - canned gh response.
-        encodeJson([
-          {
-            number: 7,
-            headRefOid: "abc123",
-            isCrossRepository: true,
-            headRepositoryOwner: { login: "octocat" },
-          },
-        ]),
-      );
-      const runs = output(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off - canned gh response.
-        encodeJson([
-          { databaseId: 10, workflowName: "build", url: "https://example.com/10" },
-          { databaseId: 11, workflowName: "test", url: "https://example.com/11" },
-        ]),
-      );
-      for (const result of [
-        detail,
-        heads,
-        runs,
-        detail,
-        heads,
-        runs,
-        output(""),
-        detail,
-        heads,
-        runs,
-        output(""),
-      ]) {
-        mockedExecute.mockReturnValueOnce(Effect.succeed(result));
-      }
+      workflowApprovalRoutes(() => crossRepositoryDetail(), heads([7]), workflowRuns([10, 11]));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       yield* cli.runPullRequestAction({
@@ -2432,99 +2438,33 @@ layer("GitHubPullRequestCli.layer", (it) => {
         action: "approve-workflows",
       });
 
-      expect(callAt(1).args).toEqual([
-        "pr",
-        "list",
-        "--repo",
-        "github.com/acme/web",
-        "--state",
-        "open",
-        "--head",
-        "feat/page",
-        "--limit",
-        "1001",
-        "--json",
-        "number,headRefOid,isCrossRepository,headRepositoryOwner",
+      // Open pull requests on this head branch, and runs scoped to this exact head.
+      expect(variablesOf("headRefName: $head")[0]).toEqual({
+        owner: "acme",
+        name: "web",
+        head: "feat/page",
+        after: null,
+      });
+      expect(restCallsTo("actions/runs?")[0]?.path).toBe(
+        "repos/acme/web/actions/runs?head_sha=abc123&branch=feat%2Fpage&event=pull_request&status=action_required&per_page=100&page=1",
+      );
+      // Each run is approved only after the head is read again and still lists it.
+      expect(restCallsTo("/approve").map((call) => [call.method, call.path])).toEqual([
+        ["POST", "repos/acme/web/actions/runs/10/approve"],
+        ["POST", "repos/acme/web/actions/runs/11/approve"],
       ]);
-      expect(callAt(2).args).toEqual([
-        "run",
-        "list",
-        "--repo",
-        "github.com/acme/web",
-        "--commit",
-        "abc123",
-        "--branch",
-        "feat/page",
-        "--event",
-        "pull_request",
-        "--status",
-        "action_required",
-        "--limit",
-        "1001",
-        "--json",
-        "databaseId,workflowName,url",
-      ]);
-      expect([callAt(6).args, callAt(10).args]).toEqual([
-        [
-          "api",
-          "--method",
-          "POST",
-          "--hostname",
-          "github.com",
-          "repos/acme/web/actions/runs/10/approve",
-          "--silent",
-        ],
-        [
-          "api",
-          "--method",
-          "POST",
-          "--hostname",
-          "github.com",
-          "repos/acme/web/actions/runs/11/approve",
-          "--silent",
-        ],
-      ]);
-      expect(mockedExecute).toHaveBeenCalledTimes(11);
+      assert.strictEqual(restCallsTo("actions/runs?").length, 3);
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("refuses a stale workflow approval after the pull request head changes", () =>
+  it.effect("refuses a stale workflow approval after the pull request head changes", () =>
     Effect.gen(function* () {
-      const detail = {
-        number: 7,
-        title: "Pull request 7",
-        url: "https://github.com/acme/web/pull/7",
-        headRefName: "feat/page",
-        headRefOid: "abc123",
-        isCrossRepository: true,
-        headRepositoryOwner: { login: "octocat" },
-        baseRefName: "main",
-        createdAt: "2026-07-01T00:00:00Z",
-        updatedAt: "2026-07-02T00:00:00Z",
-      };
-      for (const value of [
-        coreResponse(detail),
-        [
-          {
-            number: 7,
-            headRefOid: "abc123",
-            isCrossRepository: true,
-            headRepositoryOwner: { login: "octocat" },
-          },
-        ],
-        [{ databaseId: 10, workflowName: "build", url: "https://example.com/10" }],
-        coreResponse({ ...detail, headRefOid: "def456" }),
-      ]) {
-        mockedExecute.mockReturnValueOnce(
-          Effect.succeed(
-            output(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off - canned gh response.
-              encodeJson(value),
-            ),
-          ),
-        );
-      }
+      let detailReads = 0;
+      workflowApprovalRoutes(
+        () => crossRepositoryDetail(++detailReads === 1 ? "abc123" : "def456"),
+        heads([7]),
+        workflowRuns([10]),
+      );
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const error = yield* Effect.flip(
@@ -2541,30 +2481,24 @@ layer("GitHubPullRequestCli.layer", (it) => {
         _tag: "GitHubWorkflowApprovalHeadChangedError",
         number: 7,
       });
-      expect(mockedExecute).toHaveBeenCalledTimes(4);
+      assert.strictEqual(detailReads, 2);
+      expect(restCallsTo("/approve")).toEqual([]);
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("reads workflow runs and their pull request scope concurrently", () =>
+  it.effect("reads workflow runs and their pull request scope concurrently", () =>
     Effect.gen(function* () {
       const headsStarted = yield* Deferred.make<void>();
       const runsStarted = yield* Deferred.make<void>();
       mockedExecute.mockImplementation((call) =>
-        (call as LegacyCall).args[0] === "pr"
+        call.kind === "graphql"
           ? Deferred.succeed(headsStarted, undefined).pipe(
               Effect.andThen(Deferred.await(runsStarted)),
-              Effect.as(
-                output(
-                  '[{"number":7,"headRefOid":"abc123","isCrossRepository":true,"headRepositoryOwner":{"login":"octocat"}}]',
-                ),
-              ),
+              Effect.as(output(encodeJson(heads([7])))),
             )
           : Deferred.succeed(runsStarted, undefined).pipe(
               Effect.andThen(Deferred.await(headsStarted)),
-              Effect.as(
-                output('[{"databaseId":10,"workflowName":"build","url":"https://example.com/10"}]'),
-              ),
+              Effect.as(output(encodeJson(workflowRuns([10])))),
             ),
       );
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
@@ -2584,25 +2518,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("refuses workflow approval when one head belongs to several pull requests", () =>
+  it.effect("refuses workflow approval when one head belongs to several pull requests", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off - canned gh response.
-            encodeJson(
-              [7, 8].map((number) => ({
-                number,
-                headRefOid: "abc123",
-                isCrossRepository: true,
-                headRepositoryOwner: { login: "octocat" },
-              })),
-            ),
-          ),
-        ),
-      );
+      workflowApprovalRoutes(() => crossRepositoryDetail(), heads([7, 8]), workflowRuns([]));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const error = yield* Effect.flip(
@@ -2626,7 +2544,6 @@ layer("GitHubPullRequestCli.layer", (it) => {
         limit: 1_000,
       });
       expect(error.detail).toContain("instead of uniquely matching #7");
-      expect(mockedExecute).toHaveBeenCalledTimes(2);
     }),
   );
 
@@ -2672,32 +2589,20 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("surfaces a workflow run list beyond the safe approval bound", () =>
+  it.effect("surfaces a workflow run list beyond the safe approval bound", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
+      let runPages = 0;
+      mockedExecute.mockImplementation((call) => {
+        if (call.kind === "graphql") return Effect.succeed(output(encodeJson(heads([7]))));
+        const page = runPages++;
+        return Effect.succeed(
           output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off - canned gh response.
-            encodeJson([
-              {
-                number: 7,
-                headRefOid: "abc123",
-                isCrossRepository: true,
-                headRepositoryOwner: { login: "octocat" },
-              },
-            ]),
+            encodeJson(
+              workflowRuns(Array.from({ length: 100 }, (_, index) => page * 100 + index + 1)),
+            ),
           ),
-        ),
-      );
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off - canned gh response.
-            encodeJson(Array.from({ length: 1_001 }, (_, id) => ({ databaseId: id + 1 }))),
-          ),
-        ),
-      );
+        );
+      });
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const error = yield* Effect.flip(
@@ -2713,15 +2618,16 @@ layer("GitHubPullRequestCli.layer", (it) => {
         }),
       );
 
+      // Paged a hundred at a time, it stops at the first page past the bound.
       expect(error).toMatchObject({
         _tag: "GitHubWorkflowApprovalRefusedError",
         reason: "run-list-truncated",
         number: 7,
-        observedCount: 1_001,
+        observedCount: 1_100,
         limit: 1_000,
       });
       expect(error.detail).toContain("more than 1000 workflow runs");
-      expect(mockedExecute).toHaveBeenCalledTimes(2);
+      assert.strictEqual(runPages, 11);
     }),
   );
 
