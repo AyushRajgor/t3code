@@ -466,17 +466,15 @@ export const make = Effect.gen(function* () {
         }),
         {
           Ok: () =>
-            limits
-              .recordSuccess({ ...key, lease })
-              .pipe(
-                Effect.as({
-                  status,
-                  headers,
-                  body: collected.text,
-                  truncated: collected.truncated,
-                  invalidUtf8: collected.invalidUtf8,
-                }),
-              ),
+            limits.recordSuccess({ ...key, lease }).pipe(
+              Effect.as({
+                status,
+                headers,
+                body: collected.text,
+                truncated: collected.truncated,
+                invalidUtf8: collected.invalidUtf8,
+              }),
+            ),
           RateLimited: () =>
             Effect.gen(function* () {
               const retryAt = retryAtFrom(headers, yield* Clock.currentTimeMillis);
