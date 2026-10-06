@@ -18,6 +18,7 @@ const TOKEN_VARIABLES = [
 
 function harness(
   hosts: Record<string, { readonly account?: string; readonly enabled?: boolean }> = {},
+  signedOut: ReadonlyArray<string> = [],
 ) {
   const calls: Array<ReadonlyArray<string>> = [];
   const process = Layer.mock(VcsProcess.VcsProcess)({
@@ -25,6 +26,15 @@ function harness(
       Effect.sync(() => {
         calls.push(input.args);
         const user = input.args[input.args.indexOf("--user") + 1];
+        if (input.args.includes("--user") && user !== undefined && signedOut.includes(user)) {
+          return {
+            exitCode: ChildProcessSpawner.ExitCode(0),
+            stdout: "",
+            stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          };
+        }
         return {
           exitCode: ChildProcessSpawner.ExitCode(0),
           stdout: input.args.includes("--user") ? `token-for-${user}\n` : "active-token\n",
@@ -116,6 +126,18 @@ describe("GitHubCredentials", () => {
       expect(Redacted.value((yield* credentials.get("github.com")).token)).toBe("active-token");
       // The unpinned token stayed cached; only the newly pinned account cost a gh call.
       expect(calls).toHaveLength(2);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("falls back to the active login when the pinned one is no longer signed in", () => {
+    const { layer, calls } = harness({ "github.com": { account: "gone" } }, ["gone"]);
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      expect(Redacted.value((yield* credentials.get("github.com")).token)).toBe("active-token");
+      expect(calls).toEqual([
+        ["auth", "token", "--hostname", "github.com", "--user", "gone"],
+        ["auth", "token", "--hostname", "github.com"],
+      ]);
     }).pipe(Effect.provide(layer));
   });
 });

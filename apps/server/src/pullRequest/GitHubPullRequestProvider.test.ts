@@ -776,6 +776,36 @@ describe("getViewerPermissions", () => {
     );
   });
 
+  it.effect("still answers from the light access read when the detail read fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* make;
+      const permissions = yield* provider.getViewerPermissions({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+      expect(permissions.actions).toContain("merge");
+      expect(permissions.actions).not.toContain("update-branch");
+    }).pipe(
+      Effect.provide(
+        Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+          revalidateChecks: (_input, read) => read,
+          getPullRequestDetail: () =>
+            Effect.fail(
+              new GitHubPullRequestCli.GitHubPullRequestReadError({
+                command: "gh",
+                cwd: "/w",
+                operation: "getPullRequestDetail",
+                cause: new Error("head changed"),
+              }),
+            ),
+          getViewerAccess: () => Effect.succeed(access),
+        }),
+      ),
+    ),
+  );
+
   it.effect("withholds update-branch where GitHub could not compare the branch", () =>
     Effect.gen(function* () {
       const provider = yield* make;

@@ -81,6 +81,10 @@ export type GitHubCredentialUnavailableError =
   | GitHubHostDisabledError
   | GitHubCliFailedError;
 
+export const isGitHubCredentialUnavailableError = Schema.is(
+  Schema.Union([GitHubCliMissingError, GitHubNotSignedInError, GitHubHostDisabledError]),
+);
+
 /**
  * Where GitHub tokens come from. Callers ask per host and never see how the token was found,
  * so another source (an in-app OAuth login) slots in here without touching any of them.
@@ -192,7 +196,16 @@ export const make = Effect.gen(function* () {
     const [host = key, choice] = key.split("\u0000");
     // An environment token wins over a pinned account, exactly as it does in gh.
     const fromEnv = environmentToken(host, environment);
-    const token = fromEnv ?? (yield* fromGh(host, choice));
+    // A pinned login gh no longer holds (logged out, expired) falls back to the active one,
+    // which is what discovery reports as the account in use.
+    const token =
+      fromEnv ??
+      (yield* fromGh(host, choice).pipe(
+        Effect.catchTags({
+          GitHubNotSignedInError: (error) =>
+            choice === undefined ? Effect.fail(error) : fromGh(host, undefined),
+        }),
+      ));
     return {
       host,
       token: Redacted.make(token),

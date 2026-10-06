@@ -515,24 +515,34 @@ export const make = Effect.gen(function* () {
     getReviewThreadComments: (input) =>
       cli.getReviewThreadComments(input).pipe(Effect.mapError(fail("getReviewThreadComments"))),
 
-    getViewerPermissions: (input) =>
-      (input.includeUpdateBranch === false
-        ? cli
-            .getViewerAccess({ ...input, allowReserve: true })
-            .pipe(Effect.map((access) => gitHubViewerPermissions(access)))
-        : // The core detail already carries the viewer's access, the merge settings, and the base
-          // comparison, so one read answers what used to take three.
-          cli.getPullRequestDetail(input).pipe(
-            Effect.provideService(GitHubCli.AllowGitHubReserve, true),
-            Effect.map((pullRequest) =>
-              gitHubViewerPermissions({
-                ...pullRequest.viewerAccess,
-                canUpdateBranch:
-                  pullRequest.state === "open" && pullRequest.comparison?.viewerCanUpdate === true,
-              }),
-            ),
-          )
-      ).pipe(Effect.mapError(fail("getViewerPermissions"))),
+    getViewerPermissions: (input) => {
+      const lightAccess = cli
+        .getViewerAccess({ ...input, allowReserve: true })
+        .pipe(Effect.map((access) => gitHubViewerPermissions(access)));
+      if (input.includeUpdateBranch === false) {
+        return lightAccess.pipe(Effect.mapError(fail("getViewerPermissions")));
+      }
+      // The core detail already carries the viewer's access, the merge settings, and the base
+      // comparison, so one read usually answers what used to take three. When that heavier read
+      // fails, the light access read still answers, withholding only update-branch.
+      return cli.getPullRequestDetail(input).pipe(
+        Effect.provideService(GitHubCli.AllowGitHubReserve, true),
+        Effect.map((pullRequest) =>
+          gitHubViewerPermissions({
+            ...pullRequest.viewerAccess,
+            canUpdateBranch:
+              pullRequest.state === "open" && pullRequest.comparison?.viewerCanUpdate === true,
+          }),
+        ),
+        Effect.catchIf(
+          (error) =>
+            error._tag !== "GitHubApiRateLimitError" &&
+            error._tag !== "SourceControlRateLimitPausedError",
+          () => lightAccess,
+        ),
+        Effect.mapError(fail("getViewerPermissions")),
+      );
+    },
 
     getDiff: (input) => cli.getPullRequestDiff(input).pipe(Effect.mapError(fail("getDiff"))),
 

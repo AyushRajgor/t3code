@@ -18,15 +18,20 @@ const ACTIVE_ACCOUNT = "active gh account";
  * A login, blurred like RedactedSensitiveText until the panel reveals it. Plain text, not a
  * button, so it can sit inside select options; one panel toggle reveals every login.
  */
-function RedactedLogin(props: { readonly account: string; readonly revealed: boolean }) {
+function RedactedLogin(props: {
+  readonly account: string;
+  readonly revealed: boolean;
+  /** Distinguishes hidden logins from each other for a screen reader, e.g. "Account 2". */
+  readonly label?: string;
+}) {
   return props.revealed ? (
     <span className="min-w-0 truncate font-mono text-2xs">{props.account}</span>
   ) : (
-    <span
-      className="min-w-0 truncate select-none font-mono text-2xs blur-xs"
-      aria-label="Hidden account"
-    >
-      {redactedPlaceholder(props.account)}
+    <span className="min-w-0 truncate font-mono text-2xs">
+      <span className="select-none blur-xs" aria-hidden>
+        {redactedPlaceholder(props.account)}
+      </span>
+      <span className="sr-only">{props.label ?? "Hidden account"}</span>
     </span>
   );
 }
@@ -97,10 +102,9 @@ export function GitHubAccountSettings({
       {groups.map((group) => {
         const choice = hosts[group.host];
         const enabled = choice?.enabled ?? true;
-        const pinned =
-          choice?.account !== undefined && group.selectable.includes(choice.account)
-            ? choice.account
-            : ACTIVE_ACCOUNT;
+        const stalePin =
+          choice?.account !== undefined && !group.selectable.includes(choice.account);
+        const pinned = choice?.account !== undefined && !stalePin ? choice.account : ACTIVE_ACCOUNT;
         return (
           <div key={group.host} className="grid gap-2">
             <div className="flex items-center justify-between gap-3">
@@ -168,9 +172,13 @@ export function GitHubAccountSettings({
                           ) : null}
                         </span>
                       </SelectItem>
-                      {group.selectable.map((account) => (
+                      {group.selectable.map((account, index) => (
                         <SelectItem key={account} value={account}>
-                          <RedactedLogin revealed={revealed} account={account} />
+                          <RedactedLogin
+                            revealed={revealed}
+                            account={account}
+                            label={`Account ${index + 1}`}
+                          />
                         </SelectItem>
                       ))}
                     </SelectPopup>
@@ -178,10 +186,24 @@ export function GitHubAccountSettings({
                 </div>
               </div>
             ) : null}
+            {stalePin ? (
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-warning">
+                  The chosen login is no longer signed in, so the active gh login is used.
+                </p>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={saving}
+                  onClick={() => void save(group.host, { account: null })}
+                >
+                  Use active login
+                </Button>
+              </div>
+            ) : null}
             {group.broken.map((entry) => (
               <p
                 key={entry.account}
-                aria-disabled
                 className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-muted-foreground/70"
               >
                 <RedactedLogin revealed={revealed} account={entry.account} />

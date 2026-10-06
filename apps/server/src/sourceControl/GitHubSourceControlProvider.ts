@@ -213,7 +213,8 @@ export const makeDiscovery = Effect.gen(function* () {
         spec: { ...discovery, parseAuth: (input) => parseGitHubAuth(input, settings) },
       });
       const variable = environmentTokenVariable(environment);
-      if (variable === null) return cli;
+      // A host turned off in Settings stays off even with an environment token.
+      if (variable === null || settings.hosts["github.com"]?.enabled === false) return cli;
       const viewer = yield* api
         .rest({ host: "github.com", operation: "discovery", path: "user" })
         .pipe(Effect.result);

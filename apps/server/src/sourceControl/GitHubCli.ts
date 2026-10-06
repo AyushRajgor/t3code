@@ -53,7 +53,10 @@ export class GitHubCliAuthenticationError extends Schema.TaggedError<GitHubCliAu
   gitHubCliFailureFields,
 ) {
   override get message(): string {
-    return "GitHub is not authenticated. Run `gh auth login` (or set GH_TOKEN) and retry.";
+    // A missing or turned-off credential already says what to do about it.
+    return GitHubCredentials.isGitHubCredentialUnavailableError(this.cause)
+      ? this.cause.message
+      : "GitHub is not authenticated. Run `gh auth login` (or set GH_TOKEN) and retry.";
   }
 }
 
