@@ -44,7 +44,7 @@ export class GitHubCliUnavailableError extends Schema.TaggedError<GitHubCliUnava
   gitHubCliFailureFields,
 ) {
   override get message(): string {
-    return "GitHub CLI (`gh`) is required but not available on PATH. Install it and run `gh auth login`, or set GH_TOKEN.";
+    return "No GitHub credential on the server. Set GH_TOKEN, or install the GitHub CLI and run `gh auth login`.";
   }
 }
 

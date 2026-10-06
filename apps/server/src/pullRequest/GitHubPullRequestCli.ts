@@ -143,7 +143,7 @@ export class GitHubPullRequestReadError extends Schema.TaggedError<GitHubPullReq
   },
 ) {
   override get message(): string {
-    return `GitHub CLI returned an unreadable ${this.operation} response.`;
+    return `GitHub returned an unreadable ${this.operation} response.`;
   }
 }
 
@@ -156,7 +156,7 @@ export class GitHubViewerLoginUnavailableError extends Schema.TaggedError<GitHub
   },
 ) {
   override get message(): string {
-    return "GitHub CLI returned no login for the authenticated account.";
+    return "GitHub returned no login for the authenticated account.";
   }
 }
 
