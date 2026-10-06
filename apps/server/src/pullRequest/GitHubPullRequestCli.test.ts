@@ -17,6 +17,7 @@ import * as GitHubCredentials from "../sourceControl/GitHubCredentials.ts";
 import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
+import { KnownWorkflowRuns } from "./gitHubConditionalChecks.ts";
 import { BASE_COMPARISON_GRAPHQL_QUERY } from "./gitHubPullRequestJson.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -2480,6 +2481,43 @@ layer("GitHubPullRequestCli.layer", (it) => {
         ["POST", "repos/acme/web/actions/runs/11/approve"],
       ]);
       assert.strictEqual(restCallsTo("actions/runs?").length, 3);
+    }),
+  );
+
+  it.effect("counts revalidated runs that wait on a maintainer as GitHub reports them", () =>
+    Effect.gen(function* () {
+      workflowApprovalRoutes(() => crossRepositoryDetail(), heads([7]), workflowRuns([]));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const runs = yield* cli
+        .listWorkflowRunsRequiringApproval({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          headSha: "abc123",
+          headBranch: "feat/page",
+          headRepositoryOwner: "octocat",
+          isCrossRepository: true,
+        })
+        .pipe(
+          Effect.provideService(KnownWorkflowRuns, {
+            headSha: "abc123",
+            runs: [
+              // Live shape: waiting on approval is completed + action_required.
+              {
+                id: 10,
+                status: "completed",
+                conclusion: "action_required",
+                head_branch: "feat/page",
+              },
+              { id: 11, status: "completed", conclusion: "success", head_branch: "feat/page" },
+            ],
+          }),
+        );
+
+      expect(runs.map((run) => run.id)).toEqual([10]);
+      assert.strictEqual(restCallsTo("actions/runs?").length, 0);
     }),
   );
 

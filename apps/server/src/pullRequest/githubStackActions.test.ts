@@ -21,7 +21,17 @@ const runGitHubStackAction = (send: Send, input: Parameters<typeof runStackActio
   runStackAction(input).pipe(
     Effect.provide(
       Layer.mock(GitHubApi.GitHubApi)({
-        graphql: (request) => send(words(request.query, request.variables), "graphql"),
+        graphql: (request) => {
+          // GitHub refuses a document that declares a variable it never uses.
+          const declared = [...request.query.matchAll(/\$(\w+)\s*:/g)].map((match) => match[1]!);
+          const unused = declared.filter(
+            (name) => !new RegExp(`\\$${name}(?!\\w)(?!\\s*:)`).test(request.query),
+          );
+          if (unused.length > 0) {
+            return Effect.die(new Error(`Variables declared but not used: ${unused.join(", ")}`));
+          }
+          return send(words(request.query, request.variables), "graphql");
+        },
         rest: (request) =>
           send(words(request.path, request.body), "rest").pipe(
             Effect.map((body) => ({

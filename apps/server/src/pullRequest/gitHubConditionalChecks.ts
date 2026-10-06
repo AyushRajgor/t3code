@@ -27,6 +27,7 @@ const WorkflowRunSchema = Schema.Struct({
   name: Schema.optional(Schema.NullOr(Schema.String)),
   html_url: Schema.optional(Schema.NullOr(Schema.String)),
   status: Schema.optional(Schema.NullOr(Schema.String)),
+  conclusion: Schema.optional(Schema.NullOr(Schema.String)),
   head_branch: Schema.optional(Schema.NullOr(Schema.String)),
 });
 const decodeWorkflowRuns = Schema.decodeUnknownOption(

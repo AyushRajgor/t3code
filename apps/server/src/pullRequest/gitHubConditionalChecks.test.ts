@@ -51,7 +51,11 @@ it.effect(
                     : head
                       ? encodeJson({ head: { sha, repo: { id: 2 } }, base: { repo: { id: 1 } } })
                       : runs
-                        ? encodeJson({ workflow_runs: [{ id: 9, status: "action_required" }] })
+                        ? encodeJson({
+                            workflow_runs: [
+                              { id: 9, status: "completed", conclusion: "action_required" },
+                            ],
+                          })
                         : "{}",
                   truncated: false,
                   invalidUtf8: false,
@@ -79,7 +83,10 @@ it.effect(
       yield* poll();
       expect(reads).toBe(1);
       // The fork's runs were just confirmed, so the read is handed them instead of listing them.
-      expect(known[0]).toEqual({ headSha: sha, runs: [{ id: 9, status: "action_required" }] });
+      expect(known[0]).toEqual({
+        headSha: sha,
+        runs: [{ id: 9, status: "completed", conclusion: "action_required" }],
+      });
       requests.length = 0;
       yield* poll();
       expect(reads).toBe(1);

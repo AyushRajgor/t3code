@@ -1644,7 +1644,10 @@ export const make = Effect.gen(function* () {
       const known = yield* KnownWorkflowRuns;
       if (known !== null && known.headSha === input.headSha) {
         return known.runs.flatMap((run) =>
-          run.status === "action_required" && run.head_branch === input.headBranch
+          // A run waiting on a maintainer reports `completed` with an `action_required`
+          // conclusion; the `status=action_required` query matches either.
+          (run.conclusion === "action_required" || run.status === "action_required") &&
+          run.head_branch === input.headBranch
             ? [
                 {
                   id: run.id,

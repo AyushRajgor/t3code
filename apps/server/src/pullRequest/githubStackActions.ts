@@ -256,11 +256,9 @@ export const runGitHubStackAction = Effect.fn("runGitHubStackAction")(function* 
             sha: layer.headSha,
             ids: processed.map((head) => head.id),
           },
-          query: `query($owner:String!,$name:String!,$number:Int!,$sha:String!,$ids:[ID!]!){${
-            processed.length === 0
-              ? ""
-              : "processed:nodes(ids:$ids){... on PullRequest{headRefOid}}"
-          } repository(owner:$owner,name:$name){pullRequest(number:$number){id headRefOid baseRef{compare(headRef:$sha){behindBy}}}}}`,
+          // GitHub rejects a declared variable the document never uses, so `$ids` is always
+          // selected; an empty list asks for nothing.
+          query: `query($owner:String!,$name:String!,$number:Int!,$sha:String!,$ids:[ID!]!){processed:nodes(ids:$ids){... on PullRequest{headRefOid}} repository(owner:$owner,name:$name){pullRequest(number:$number){id headRefOid baseRef{compare(headRef:$sha){behindBy}}}}}`,
         });
         const {
           data: {
