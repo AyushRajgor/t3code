@@ -145,12 +145,8 @@ export class GitHubPullRequestReadError extends Schema.TaggedError<GitHubPullReq
     cause: Schema.Defect(),
   },
 ) {
-  get detail(): string {
-    return `GitHub CLI returned an unreadable ${this.operation} response.`;
-  }
-
   override get message(): string {
-    return `GitHub CLI failed in ${this.operation}: ${this.detail}`;
+    return `GitHub CLI returned an unreadable ${this.operation} response.`;
   }
 }
 
@@ -162,12 +158,8 @@ export class GitHubViewerLoginUnavailableError extends Schema.TaggedError<GitHub
     cwd: Schema.String,
   },
 ) {
-  get detail(): string {
-    return "GitHub CLI returned no login for the authenticated account.";
-  }
-
   override get message(): string {
-    return `GitHub CLI failed in getViewerLogin: ${this.detail}`;
+    return "GitHub CLI returned no login for the authenticated account.";
   }
 }
 
@@ -181,12 +173,8 @@ export class GitHubPullRequestUpdatedAtUnavailableError extends Schema.TaggedErr
     number: Schema.Int,
   },
 ) {
-  get detail(): string {
-    return `Pull request ${this.repository}#${this.number} reported no update time.`;
-  }
-
   override get message(): string {
-    return `GitHub CLI failed in getPullRequestSummary: ${this.detail}`;
+    return `Pull request ${this.repository}#${this.number} reported no update time.`;
   }
 }
 
@@ -198,12 +186,8 @@ export class GitHubDiffCursorError extends Schema.TaggedError<GitHubDiffCursorEr
     cwd: Schema.String,
   },
 ) {
-  get detail(): string {
-    return "The diff cursor was not one this pull request handed out.";
-  }
-
   override get message(): string {
-    return `GitHub CLI failed in getPullRequestDiff: ${this.detail}`;
+    return "The diff cursor was not one this pull request handed out.";
   }
 }
 
@@ -215,12 +199,8 @@ export class GitHubDiffCommitError extends Schema.TaggedError<GitHubDiffCommitEr
     cwd: Schema.String,
   },
 ) {
-  get detail(): string {
-    return "The named commit was not a commit sha.";
-  }
-
   override get message(): string {
-    return `GitHub CLI failed in getPullRequestDiff: ${this.detail}`;
+    return "The named commit was not a commit sha.";
   }
 }
 
@@ -234,14 +214,10 @@ export class GitHubDiffRevisionsUnavailableError extends Schema.TaggedError<GitH
     commit: Schema.optional(Schema.String),
   },
 ) {
-  get detail(): string {
+  override get message(): string {
     return this.commit === undefined
       ? `Pull request #${this.number} reported no usable base and head revisions.`
       : `Commit ${this.commit} reported no usable revisions for this file.`;
-  }
-
-  override get message(): string {
-    return `GitHub CLI failed in getPullRequestDiffFileContents: ${this.detail}`;
   }
 }
 
@@ -255,14 +231,10 @@ export class GitHubDiffFileContentsUnavailableError extends Schema.TaggedError<G
     reason: Schema.Literals(["oversized", "binary"]),
   },
 ) {
-  get detail(): string {
+  override get message(): string {
     return this.reason === "oversized"
       ? `The diff file '${this.path}' exceeds the 1 MB expansion limit.`
       : `The diff file '${this.path}' is binary.`;
-  }
-
-  override get message(): string {
-    return `GitHub CLI failed in getPullRequestDiffFileContents: ${this.detail}`;
   }
 }
 
@@ -280,12 +252,8 @@ export class GitHubRepositorySelectorError extends Schema.TaggedError<GitHubRepo
     operation: Schema.String,
   },
 ) {
-  get detail(): string {
-    return "A repository was named that GitHub cannot address.";
-  }
-
   override get message(): string {
-    return `GitHub CLI failed in ${this.operation}: ${this.detail}`;
+    return "A repository was named that GitHub cannot address.";
   }
 }
 
@@ -298,12 +266,8 @@ export class GitHubSubjectScopeError extends Schema.TaggedError<GitHubSubjectSco
     operation: Schema.String,
   },
 ) {
-  get detail(): string {
-    return "The named subject did not belong to the named pull request.";
-  }
-
   override get message(): string {
-    return `GitHub CLI failed in ${this.operation}: ${this.detail}`;
+    return "The named subject did not belong to the named pull request.";
   }
 }
 
@@ -319,7 +283,7 @@ export class GitHubWorkflowApprovalRefusedError extends Schema.TaggedError<GitHu
     limit: Schema.Int,
   },
 ) {
-  get detail(): string {
+  override get message(): string {
     if (this.reason === "head-list-truncated") {
       return `GitHub returned more than ${this.limit} pull requests for this head branch.`;
     }
@@ -327,10 +291,6 @@ export class GitHubWorkflowApprovalRefusedError extends Schema.TaggedError<GitHu
       return `The head revision matched ${this.observedCount} pull requests instead of uniquely matching #${this.number}.`;
     }
     return `GitHub returned more than ${this.limit} workflow runs awaiting approval.`;
-  }
-
-  override get message(): string {
-    return `GitHub CLI refused listWorkflowRunsRequiringApproval: ${this.detail}`;
   }
 }
 
@@ -343,12 +303,8 @@ export class GitHubWorkflowApprovalHeadUnavailableError extends Schema.TaggedErr
     number: Schema.Int,
   },
 ) {
-  get detail(): string {
-    return `GitHub did not report a complete head revision for #${this.number}.`;
-  }
-
   override get message(): string {
-    return `GitHub CLI refused approve-workflows: ${this.detail}`;
+    return `GitHub did not report a complete head revision for #${this.number}.`;
   }
 }
 
@@ -361,12 +317,8 @@ export class GitHubWorkflowApprovalHeadChangedError extends Schema.TaggedError<G
     number: Schema.Int,
   },
 ) {
-  get detail(): string {
-    return `The head revision of #${this.number} changed before its workflows could be approved.`;
-  }
-
   override get message(): string {
-    return `GitHub CLI refused approve-workflows: ${this.detail}`;
+    return `The head revision of #${this.number} changed before its workflows could be approved.`;
   }
 }
 

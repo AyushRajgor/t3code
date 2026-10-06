@@ -202,7 +202,7 @@ export const make = Effect.gen(function* () {
       provider: "github",
       operation,
       ...gitHubProviderFailure(error),
-      detail: error.detail,
+      detail: error.message,
       cause: error,
     });
 

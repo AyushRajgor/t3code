@@ -469,7 +469,7 @@ it.effect(
               host,
               token: Redacted.make(activeToken),
               source: "gh" as const,
-              fingerprint: GitHubCredentials.credentialFingerprint(host, activeToken),
+              fingerprint: `${host}:${activeToken.length}${activeToken.at(-1)}`,
             })),
           invalidate: () => Effect.void,
         }),
@@ -2569,7 +2569,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         observedCount: 2,
         limit: 1_000,
       });
-      expect(error.detail).toContain("instead of uniquely matching #7");
+      expect(error.message).toContain("instead of uniquely matching #7");
     }),
   );
 
@@ -2652,7 +2652,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         observedCount: 1_100,
         limit: 1_000,
       });
-      expect(error.detail).toContain("more than 1000 workflow runs");
+      expect(error.message).toContain("more than 1000 workflow runs");
       assert.strictEqual(runPages, 11);
     }),
   );
@@ -3486,7 +3486,8 @@ layer("GitHubPullRequestCli.layer", (it) => {
       );
 
       assert.strictEqual(error._tag, "GitHubSubjectScopeError");
-      expect(error.message).toContain("updateComment");
+      if (error._tag === "GitHubSubjectScopeError")
+        assert.strictEqual(error.operation, "updateComment");
       // Refused before any mutation was sent.
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
     }),
