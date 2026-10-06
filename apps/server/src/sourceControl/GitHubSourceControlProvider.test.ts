@@ -31,8 +31,9 @@ function makeProvider(
   api: Partial<GitHubApi.GitHubApi["Service"]> = {},
 ) {
   return GitHubSourceControlProvider.make.pipe(
-    Effect.provide(Layer.mock(GitHubCli.GitHubCli)(github)),
-    Effect.provide(Layer.mock(GitHubApi.GitHubApi)(api)),
+    Effect.provide(
+      Layer.merge(Layer.mock(GitHubCli.GitHubCli)(github), Layer.mock(GitHubApi.GitHubApi)(api)),
+    ),
   );
 }
 

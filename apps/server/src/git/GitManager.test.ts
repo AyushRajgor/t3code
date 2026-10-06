@@ -728,8 +728,12 @@ function makeManager(input?: {
           discover: Effect.succeed([]),
         }),
       ),
-      Effect.provide(Layer.succeed(GitHubCli.GitHubCli, gitHubCli)),
-      Effect.provide(Layer.mock(GitHubApi.GitHubApi)({})),
+      Effect.provide(
+        Layer.merge(
+          Layer.succeed(GitHubCli.GitHubCli, gitHubCli),
+          Layer.mock(GitHubApi.GitHubApi)({}),
+        ),
+      ),
     ),
   );
 

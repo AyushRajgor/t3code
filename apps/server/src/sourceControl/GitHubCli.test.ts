@@ -445,7 +445,7 @@ describe("GitHubCli writes", () => {
         body: "Body",
         maintainer_can_modify: true,
       });
-    }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer), Effect.scoped);
+    }).pipe(Effect.provide(Layer.merge(layer, NodeServices.layer)), Effect.scoped);
   });
 
   it.effect("creates a repository under an organization the viewer is not", () => {
