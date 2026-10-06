@@ -1902,7 +1902,7 @@ export const make = Effect.gen(function* () {
     key: ({ request, context }) =>
       JSON.stringify([
         request.host.toLowerCase(),
-        Context.getOrElse(context, GitHubCli.PinnedGitHubCredential, () => null)
+        Context.getOrElse(context, GitHubApi.PinnedGitHubCredential, () => null)
           ?.credentialFingerprint ?? null,
         Context.getOrElse(context, SourceControlRateLimit.CredentialScope, () => ""),
       ]),

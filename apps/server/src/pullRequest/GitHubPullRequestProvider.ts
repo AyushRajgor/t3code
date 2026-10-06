@@ -106,8 +106,9 @@ export function gitHubProviderFailure(
   error: GitHubPullRequestCli.GitHubPullRequestCliError,
 ): PullRequestProviderFailure {
   switch (error._tag) {
-    case "GitHubCredentialUnavailableError":
-      return { reason: error.reason === "cli-missing" ? "missing-tool" : "unauthenticated" };
+    case "GitHubCliMissingError":
+      return { reason: "missing-tool" };
+    case "GitHubNotSignedInError":
     case "GitHubApiAuthenticationError":
       return { reason: "unauthenticated" };
     case "GitHubApiRateLimitError":

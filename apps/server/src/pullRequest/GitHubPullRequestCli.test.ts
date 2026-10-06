@@ -811,7 +811,8 @@ layer("GitHubPullRequestCli.layer", (it) => {
       // GitHub had no answer for #8, so its watch reads it in full.
       expect(eight).toBeNull();
       expect(mockedExecute).toHaveBeenCalledOnce();
-      expect(callAt(0).args.at(-1) ?? "").toContain(
+      const call = callAt(0);
+      expect(call.kind === "graphql" ? call.query : "").toContain(
         'w1: repository(owner: "acme", name: "web") { pullRequest(number: 8)',
       );
     }),
