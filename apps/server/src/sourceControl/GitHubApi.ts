@@ -181,6 +181,48 @@ export function gitHubApiUrls(host: string): { readonly rest: string; readonly g
   return { rest: `https://${normalized}/api/v3`, graphql: `https://${normalized}/api/graphql` };
 }
 
+/** GraphQL documents longer than this are cut in traces; the hash still identifies them. */
+const TRACED_QUERY_MAX_CHARS = 4_000;
+
+/** A stable short id for a GraphQL document, so traces group by query without its text. */
+function queryHash(query: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < query.length; index++) {
+    hash ^= query.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/** The numeric rate-limit headers GitHub sends, as span attributes. */
+function rateLimitAttributes(
+  headers: Readonly<Record<string, string | undefined>>,
+): Record<string, number | string> {
+  const attributes: Record<string, number | string> = {};
+  for (const [header, name] of [
+    ["x-ratelimit-limit", "github.ratelimit.limit"],
+    ["x-ratelimit-remaining", "github.ratelimit.remaining"],
+    ["x-ratelimit-used", "github.ratelimit.used"],
+    ["x-ratelimit-reset", "github.ratelimit.reset"],
+  ] as const) {
+    const value = Number(headers[header]);
+    if (headers[header] !== undefined && Number.isFinite(value)) attributes[name] = value;
+  }
+  const resource = headers["x-ratelimit-resource"];
+  if (resource !== undefined) attributes["github.ratelimit.resource"] = resource;
+  return attributes;
+}
+
+const decodeGraphQlCost = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Struct({
+        rateLimit: Schema.Struct({ cost: Schema.Number, remaining: Schema.Number }),
+      }),
+    }),
+  ),
+);
+
 /** The pause GitHub asked for, from `retry-after` or the primary limit's reset. */
 function retryAtFrom(
   headers: Readonly<Record<string, string | undefined>>,
@@ -346,26 +388,46 @@ export const make = Effect.gen(function* () {
     readonly timeout?: Duration.Duration | undefined;
   }) {
     const host = normalizeHost(input.host);
+    // Only the path: a query string can carry a SHA or a branch, and never needs to be in a trace.
+    yield* Effect.annotateCurrentSpan({
+      "github.host": host,
+      "github.operation": input.operation,
+      "github.kind": input.graphql === true ? "graphql" : "rest",
+      "http.request.method": input.request.method,
+      "url.path": new URL(input.request.url).pathname,
+    });
     const { token, fingerprint } = yield* credential(host);
     const scope = yield* SourceControlRateLimit.CredentialScope;
     const key = { provider: "github" as const, host };
     const run = Effect.gen(function* () {
-      const lease = yield* limits.check(
-        key,
-        input.allowReserve ? { allowPaused: true } : undefined,
-      );
-      // One deadline covers the headers and the body: a host that answers headers and then stalls
-      // must not hold a slot of the shared gate for undici's own five-minute body timeout.
-      const { response, collected } = yield* Effect.gen(function* () {
-        const response: HttpClientResponse.HttpClientResponse = yield* httpClient.execute(
-          input.request.pipe(
-            HttpClientRequest.bearerToken(Redacted.value(token)),
-            HttpClientRequest.setHeaders({
-              "x-github-api-version": API_VERSION,
-              "user-agent": "t3code",
+      const lease = yield* limits
+        .check(key, input.allowReserve ? { allowPaused: true } : undefined)
+        .pipe(
+          Effect.tapError((paused) =>
+            Effect.annotateCurrentSpan({
+              "github.paused": true,
+              "github.retry_at": paused.retryAt,
             }),
           ),
         );
+      // One deadline covers the headers and the body: a host that answers headers and then stalls
+      // must not hold a slot of the shared gate for undici's own five-minute body timeout.
+      const { response, collected } = yield* Effect.gen(function* () {
+        const response: HttpClientResponse.HttpClientResponse = yield* httpClient
+          .execute(
+            input.request.pipe(
+              HttpClientRequest.bearerToken(Redacted.value(token)),
+              HttpClientRequest.setHeaders({
+                "x-github-api-version": API_VERSION,
+                "user-agent": "t3code",
+              }),
+            ),
+          )
+          .pipe(
+            // `GitHubApi.send` is the request's span. The client's own span would add `url.full`
+            // and `url.query`, which can carry SHAs and branch names, so it is off for GitHub.
+            Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+          );
         const collected = yield* collectUint8StreamText({
           stream: response.stream,
           maxBytes: input.maxResponseBytes,
@@ -385,6 +447,10 @@ export const make = Effect.gen(function* () {
       );
       const headers = response.headers;
       const status = response.status;
+      yield* Effect.annotateCurrentSpan({
+        "http.response.status_code": status,
+        ...rateLimitAttributes(headers),
+      });
       const context = { host, operation: input.operation };
       return yield* Answer.$match(
         classify({
@@ -408,6 +474,10 @@ export const make = Effect.gen(function* () {
             Effect.gen(function* () {
               const retryAt = retryAtFrom(headers, yield* Clock.currentTimeMillis);
               yield* limits.recordRateLimit({ ...key, lease, retryAt });
+              yield* Effect.annotateCurrentSpan({
+                "github.rate_limited": true,
+                ...(retryAt === undefined ? {} : { "github.retry_at": retryAt }),
+              });
               return yield* new GitHubApiRateLimitError({
                 ...context,
                 ...(retryAt === undefined ? {} : { retryAt }),
@@ -469,6 +539,15 @@ export const make = Effect.gen(function* () {
       const { fingerprint } = yield* credential(host);
       const scope = (yield* SourceControlRateLimit.CredentialScope) || fingerprint;
       const allowReserve = input.allowReserve ?? (yield* AllowGitHubReserve);
+      // The document, never its variables: user text (bodies, search terms) travels as variables.
+      yield* Effect.annotateCurrentSpan({
+        "github.operation": input.operation,
+        "github.graphql.query_hash": queryHash(input.query),
+        "github.graphql.query":
+          input.query.length > TRACED_QUERY_MAX_CHARS
+            ? `${input.query.slice(0, TRACED_QUERY_MAX_CHARS)}…`
+            : input.query,
+      });
       return yield* Effect.gen(function* () {
         const query = yield* budget.query(
           host,
@@ -496,6 +575,13 @@ export const make = Effect.gen(function* () {
           });
         }
         yield* budget.observe(host, response.body);
+        const cost = Option.getOrUndefined(decodeGraphQlCost(response.body));
+        if (cost !== undefined) {
+          yield* Effect.annotateCurrentSpan({
+            "github.graphql.cost": cost.data.rateLimit.cost,
+            "github.graphql.remaining": cost.data.rateLimit.remaining,
+          });
+        }
         return response.body;
       }).pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, scope));
     },

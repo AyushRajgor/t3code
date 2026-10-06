@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as PlatformError from "effect/PlatformError";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
 import { ChildProcessSpawner } from "effect/process";
 import { VcsProcessSpawnError, VcsProcessTimeoutError } from "@t3tools/contracts";
 import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/http";
@@ -117,6 +118,78 @@ describe("GitHubApi", () => {
       expect(requests[0]!.headers.authorization).toBe("Bearer first");
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "traces the operation, path, query and cost, never the query string or variables",
+    () => {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      const { layer } = harness((request) =>
+        request.url.endsWith("/graphql")
+          ? json(
+              {
+                data: {
+                  viewer: { login: "julius" },
+                  rateLimit: {
+                    cost: 3,
+                    limit: 5000,
+                    remaining: 4990,
+                    resetAt: "2026-10-05T13:00:00Z",
+                  },
+                },
+              },
+              { headers: { "x-ratelimit-remaining": "4990", "x-ratelimit-resource": "graphql" } },
+            )
+          : json({ ok: true }, { headers: { "x-ratelimit-remaining": "4800" } }),
+      );
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(NOW);
+        const api = yield* GitHubApi.GitHubApi;
+        yield* api.graphql({
+          host: "github.com",
+          operation: "getPullRequestDetail",
+          query: "query($body: String!) { viewer { login } }",
+          variables: { body: "secret user text" },
+        });
+        yield* api.rest({
+          host: "github.com",
+          operation: "listWorkflowRuns",
+          path: "repos/acme/web/actions/runs?head_sha=abc123&branch=feat%2Fx",
+        });
+        const byName = (name: string) => spans.filter((span) => span.name === name);
+        const graphql = Object.fromEntries(byName("GitHubApi.graphql")[0]!.attributes);
+        expect(graphql).toMatchObject({
+          "github.operation": "getPullRequestDetail",
+          "github.graphql.query": "query($body: String!) { viewer { login } }",
+          "github.graphql.cost": 3,
+          "github.graphql.remaining": 4990,
+        });
+        expect(String(graphql["github.graphql.query_hash"])).toMatch(/^[0-9a-f]{8}$/);
+        const rest = Object.fromEntries(byName("GitHubApi.send")[1]!.attributes);
+        expect(rest).toMatchObject({
+          "github.operation": "listWorkflowRuns",
+          "github.kind": "rest",
+          "url.path": "/repos/acme/web/actions/runs",
+          "http.response.status_code": 200,
+          "github.ratelimit.remaining": 4800,
+        });
+        // Nothing recorded carries the query string, the variables, or the token.
+        const everything = spans
+          .flatMap((span) => [...span.attributes].map(([key, value]) => `${key}=${String(value)}`))
+          .join("\n");
+        expect(everything).not.toContain("head_sha");
+        expect(everything).not.toContain("secret user text");
+        expect(everything).not.toContain("first");
+        expect(spans.some((span) => span.attributes.has("url.full"))).toBe(false);
+      }).pipe(Effect.provide(layer), Effect.withTracer(tracer));
+    },
+  );
 
   it.effect("fails a GraphQL answer that carries errors, naming GitHub's reason", () => {
     const { layer } = harness(() =>
