@@ -19,6 +19,7 @@ const TOKEN_VARIABLES = [
 function harness(
   hosts: Record<string, { readonly account?: string; readonly enabled?: boolean }> = {},
   signedOut: ReadonlyArray<string> = [],
+  tokens: Record<string, string> = {},
 ) {
   const calls: Array<ReadonlyArray<string>> = [];
   const process = Layer.mock(VcsProcess.VcsProcess)({
@@ -45,7 +46,9 @@ function harness(
       }),
   });
   const layer = GitHubCredentials.layer.pipe(
-    Layer.provideMerge(ServerSettings.ServerSettingsService.layerTest({ github: { hosts } })),
+    Layer.provideMerge(
+      ServerSettings.ServerSettingsService.layerTest({ github: { hosts, tokens } }),
+    ),
     Layer.provide(process),
     Layer.provide(NodeServices.layer),
   );
@@ -138,6 +141,30 @@ describe("GitHubCredentials", () => {
         ["auth", "token", "--hostname", "github.com", "--user", "gone"],
         ["auth", "token", "--hostname", "github.com"],
       ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("uses a token saved in Settings before GH_TOKEN and gh", () => {
+    vi.stubEnv("GH_TOKEN", "env-token");
+    const { layer, calls } = harness({}, [], { "github.com": "saved-token" });
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      const credential = yield* credentials.get("github.com");
+      expect(Redacted.value(credential.token)).toBe("saved-token");
+      expect(credential.source).toBe("settings");
+      expect(calls).toEqual([]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps a host turned off even with a token saved in Settings", () => {
+    const { layer } = harness({ "github.com": { enabled: false } }, [], {
+      "github.com": "saved-token",
+    });
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      expect((yield* Effect.flip(credentials.get("github.com")))._tag).toBe(
+        "GitHubHostDisabledError",
+      );
     }).pipe(Effect.provide(layer));
   });
 });

@@ -58,6 +58,7 @@ import {
 } from "../Icons";
 import { BitbucketCredentialsSettings } from "./BitbucketCredentialsSettings";
 import { GitHubAccountSettings } from "./GitHubAccountSettings";
+import { GitHubTokenSettings } from "./GitHubTokenSettings";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SourceControlWritingSettingsSection } from "./SourceControlWritingSettings";
 import {
@@ -614,14 +615,24 @@ export function SourceControlSettingsPanel() {
                         onSaved={handleScan}
                       />
                     </SettingsSearchTarget>
-                  ) : item.kind === "github" && item.status === "available" ? (
+                  ) : item.kind === "github" ? (
                     <SettingsSearchTarget id={searchableSetting("github-accounts").id}>
-                      <GitHubAccountSettings
-                        key={environmentId}
-                        environmentId={environmentId}
-                        auth={item.auth}
-                        onSaved={handleScan}
-                      />
+                      <div className="grid gap-6">
+                        {/* Shown even without gh: a saved token is how GitHub works without the CLI. */}
+                        <GitHubTokenSettings
+                          key={`token-${environmentId}`}
+                          environmentId={environmentId}
+                          onSaved={handleScan}
+                        />
+                        {item.status === "available" ? (
+                          <GitHubAccountSettings
+                            key={environmentId}
+                            environmentId={environmentId}
+                            auth={item.auth}
+                            onSaved={handleScan}
+                          />
+                        ) : null}
+                      </div>
                     </SettingsSearchTarget>
                   ) : undefined}
                 </DiscoveryItemRow>

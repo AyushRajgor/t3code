@@ -753,10 +753,10 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "github-accounts",
-    title: "GitHub accounts",
+    title: "GitHub accounts and token",
     to: "/settings/source-control",
     searchTerms: [
-      "github gh account login user host enterprise ghes switch multiple accounts disable sign in",
+      "github gh account login user host enterprise ghes switch multiple accounts disable sign in token personal access token pat api key credential",
     ],
     environmentOnly: true,
     scope: "environment-defaults",

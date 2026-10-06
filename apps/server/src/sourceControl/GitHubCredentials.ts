@@ -21,7 +21,7 @@ const TOKEN_TTL = Duration.minutes(5);
 /** No credential is retried sooner, so a fresh `gh auth login` takes effect on the next read. */
 const MISSING_TTL = Duration.seconds(10);
 
-export const GitHubCredentialSource = Schema.Literals(["env", "gh"]);
+export const GitHubCredentialSource = Schema.Literals(["settings", "env", "gh"]);
 export type GitHubCredentialSource = typeof GitHubCredentialSource.Type;
 
 export interface GitHubCredential {
@@ -188,6 +188,13 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => undefined),
     );
 
+  /** A token saved in Settings for the host, read fresh so a saved or removed one applies at once. */
+  const savedToken = (host: string) =>
+    serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.github.tokens[host]?.trim() || null),
+      Effect.orElseSucceed(() => null),
+    );
+
   /** Cache key: the host plus its pinned account, so a changed pin misses the cache. */
   const cacheKey = (host: string, account: string | undefined) =>
     account === undefined ? host : `${host}\u0000${account}`;
@@ -233,6 +240,17 @@ export const make = Effect.gen(function* () {
       const choice = yield* hostChoice(host);
       if (choice?.enabled === false) {
         return yield* new GitHubHostDisabledError({ host });
+      }
+      // A token saved in Settings is the most deliberate choice, so it comes before the
+      // environment and gh. It is read from the secret store each time, so it needs no cache.
+      const saved = yield* savedToken(host);
+      if (saved !== null) {
+        return {
+          host,
+          token: Redacted.make(saved),
+          source: "settings",
+          fingerprint: yield* fingerprintOf(host, saved),
+        } satisfies GitHubCredential;
       }
       return yield* Cache.get(cache, cacheKey(host, choice?.account));
     }),

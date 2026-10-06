@@ -1016,7 +1016,7 @@ export type BitbucketSettings = typeof BitbucketSettings.Type;
 /**
  * Per-host choices for the GitHub CLI's logins. `account` pins one of the logins
  * `gh` holds for the host instead of its active one; a disabled host gets no
- * credential at all. `GH_TOKEN` and friends still win over both, as they do in `gh`.
+ * credential at all. A token saved here wins over `GH_TOKEN` and friends, which win over `gh`.
  */
 /** A GitHub host name, lowercased on decode so `GitHub.com` and `github.com` are one entry. */
 export const GitHubHost = TrimmedNonEmptyString.pipe(
@@ -1032,6 +1032,13 @@ export type GitHubHostSettings = typeof GitHubHostSettings.Type;
 export const GitHubSettings = Schema.Struct({
   /** Keyed by lowercased host, for example `github.com`. */
   hosts: Schema.Record(GitHubHost, GitHubHostSettings).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  /**
+   * A token per host, used before `GH_TOKEN` and `gh`. The server keeps each one in its secret
+   * store; settings and clients only ever see a redaction marker for a saved token.
+   */
+  tokens: Schema.Record(GitHubHost, TrimmedString).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
 });
@@ -1739,10 +1746,14 @@ export const ServerSettingsPatch = Schema.Struct({
       apiToken: Schema.optionalKey(TrimmedString),
     }),
   ),
-  /** `hosts` replaces the whole map, so an omitted host or account clears it. */
+  /**
+   * `hosts` replaces the whole map, so an omitted host or account clears it. `tokens` merges per
+   * host: an empty token removes that host's token, the redaction marker keeps it.
+   */
   github: Schema.optionalKey(
     Schema.Struct({
       hosts: Schema.optionalKey(Schema.Record(GitHubHost, GitHubHostSettings)),
+      tokens: Schema.optionalKey(Schema.Record(GitHubHost, TrimmedString)),
     }),
   ),
   providers: Schema.optionalKey(
