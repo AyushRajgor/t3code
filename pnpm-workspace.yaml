@@ -45,6 +45,7 @@ catalog:
   "@tailwindcss/node": 4.3.3
   "@tailwindcss/oxide": 4.3.3
   "@tailwindcss/vite": 4.3.3
+  "@trycua/cua-driver": 0.34.0
   "@types/node": 24.12.4
   effect: 4.0.1
   jose: 6.2.2
@@ -164,6 +165,13 @@ minimumReleaseAgeExclude:
   - "@opencode/client@2.0.23"
   - "@opencode/protocol@2.0.23"
   - "@opencode/schema@2.0.23"
+  - "@trycua/cua-driver-darwin-arm64@0.34.0"
+  - "@trycua/cua-driver-darwin-x64@0.34.0"
+  - "@trycua/cua-driver-linux-arm64-gnu@0.34.0"
+  - "@trycua/cua-driver-linux-x64-gnu@0.34.0"
+  - "@trycua/cua-driver-win32-arm64-msvc@0.34.0"
+  - "@trycua/cua-driver-win32-x64-msvc@0.34.0"
+  - "@trycua/cua-driver@0.34.0"
 
 overrides:
   # Keep jsdom's optional peer consistent so Vite+ has one test-runner instance.
