@@ -315,6 +315,7 @@ it.effect(
               headers: {},
               body: JSON.stringify({ title: "GitHub issue", body: null }),
               truncated: false,
+              invalidUtf8: false,
             }),
         },
         gitlab: {

@@ -6,7 +6,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
-import * as Redacted from "effect/Redacted";
 import * as Request from "effect/Request";
 import * as RequestResolver from "effect/RequestResolver";
 import * as Result from "effect/Result";
@@ -35,46 +34,10 @@ import {
   type NormalizedGitHubPullRequestRecord,
 } from "./gitHubPullRequests.ts";
 
-const DEFAULT_TIMEOUT_MS = 30_000;
-
 /** Server-local credential scope; never put its value in RPC payloads or cache keys. */
 export const PinnedGitHubCredential = GitHubApi.PinnedGitHubCredential;
 
 export const AllowGitHubReserve = GitHubApi.AllowGitHubReserve;
-
-// The hosts a deprecated `execute` command reaches, so a pinned credential never leaves its
-// host. Deleted with `execute`.
-function commandHosts(args: ReadonlyArray<string>): Array<string | null> {
-  const hosts: Array<string | null> = [];
-  const repositoryHost = (repository: string | undefined) => {
-    if (repository === undefined) return null;
-    if (/^https?:\/\//i.test(repository)) {
-      try {
-        return new URL(repository).host.toLowerCase();
-      } catch {
-        return null;
-      }
-    }
-    const parts = repository.split("/");
-    return parts.length === 3 ? parts[0]!.toLowerCase() : null;
-  };
-  if (args[0] === "repo" && args[1] === "view") hosts.push(repositoryHost(args[2]));
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index]!;
-    if (arg === "--hostname") hosts.push(args[++index]?.toLowerCase() ?? null);
-    else if (arg.startsWith("--hostname=")) hosts.push(arg.slice(11).toLowerCase());
-    else if (arg === "--repo" || arg === "-R") hosts.push(repositoryHost(args[++index]));
-    else if (arg.startsWith("--repo=")) hosts.push(repositoryHost(arg.slice(7)));
-    else if (arg.startsWith("-R")) hosts.push(repositoryHost(arg.slice(2)));
-    else if (/^https?:\/\//i.test(arg)) hosts.push(repositoryHost(arg));
-  }
-  return hosts;
-}
-
-function targetsVerifiedHost(args: ReadonlyArray<string>, host: string): boolean {
-  const hosts = commandHosts(args);
-  return hosts.length > 0 && hosts.every((target) => target === host);
-}
 
 const gitHubCliFailureFields = {
   command: Schema.Literal("gh"),
@@ -311,25 +274,6 @@ export interface GitHubRepositoryCloneUrls {
 export class GitHubCli extends Context.Service<
   GitHubCli,
   {
-    /**
-     * Runs `gh` itself.
-     *
-     * @deprecated Kept only for the pull request layer until it reads through `GitHubApi`; it is
-     * removed with that change. Everything else here goes through `GitHubApi`.
-     */
-    readonly execute: (input: {
-      readonly cwd: string;
-      readonly args: ReadonlyArray<string>;
-      readonly timeoutMs?: number;
-      /** Piped to the child's stdin, for payloads that must never appear in argv. */
-      readonly stdin?: string;
-      readonly env?: NodeJS.ProcessEnv;
-      readonly maxOutputBytes?: number;
-      readonly rateLimitHost?: string;
-      readonly allowReserve?: boolean;
-      readonly acceptNotModified?: boolean;
-    }) => Effect.Effect<VcsProcess.VcsProcessOutput, GitHubCliError>;
-
     readonly listOpenPullRequests: (input: {
       readonly cwd: string;
       readonly headSelector: string;
@@ -649,83 +593,6 @@ export const make = Effect.gen(function* () {
   const api = yield* GitHubApi.GitHubApi;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const fileSystem = yield* FileSystem.FileSystem;
-
-  /**
-   * Runs `gh` itself.
-   *
-   * @deprecated Only the pull request layer still calls this, until it moves onto `GitHubApi`;
-   * it is deleted with that change. New code reads GitHub through `GitHubApi`.
-   */
-  const execute: GitHubCli["Service"]["execute"] = Effect.fn("GitHubCli.execute")(
-    function* (input) {
-      const credential = yield* PinnedGitHubCredential;
-      if (credential !== null && !targetsVerifiedHost(input.args, credential.host)) {
-        return yield* new GitHubCliCommandError({
-          command: "gh",
-          cwd: input.cwd,
-          cause: new Error("The GitHub command does not target the verified credential's host."),
-        });
-      }
-      const token = credential === null ? undefined : Redacted.value(credential.token);
-      const env =
-        credential === null
-          ? input.env
-          : {
-              ...input.env,
-              GH_HOST: credential.host,
-              GH_TOKEN: token,
-              GITHUB_TOKEN: token,
-              GH_ENTERPRISE_TOKEN: token,
-              GITHUB_ENTERPRISE_TOKEN: token,
-              GH_DEBUG: "",
-            };
-      const result = yield* process
-        .run({
-          operation: "GitHubCli.execute",
-          command: "gh",
-          args: input.args,
-          cwd: input.cwd,
-          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          ...(input.acceptNotModified ? { allowNonZeroExit: true } : {}),
-          ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
-          ...(env !== undefined ? { env } : {}),
-          ...(input.maxOutputBytes !== undefined ? { maxOutputBytes: input.maxOutputBytes } : {}),
-        })
-        .pipe(Effect.mapError((error) => fromVcsError({ command: "gh", cwd: input.cwd }, error)));
-      if (result.exitCode !== 0 && input.acceptNotModified) {
-        const status = /^HTTP\/\S+ (\d+)/.exec(result.stdout)?.[1];
-        if (status !== "304" || !input.args.includes("--include")) {
-          const context = { command: "gh" as const, cwd: input.cwd, cause: undefined };
-          const headers = result.stdout.split(/\r?\n\r?\n/, 1)[0] ?? "";
-          const header = (name: string) =>
-            new RegExp(`^${name}:\\s*(.*)$`, "im").exec(headers)?.[1]?.trim();
-          if (
-            status === "429" ||
-            (status === "403" &&
-              (header("x-ratelimit-remaining") === "0" ||
-                header("retry-after") !== undefined ||
-                /rate limit/i.test(result.stderr)))
-          ) {
-            const now = DateTime.toEpochMillis(yield* DateTime.now);
-            const reset = Number(header("x-ratelimit-reset")) * 1_000;
-            const retryAt =
-              SourceControlRateLimit.retryAtFromHeader(header("retry-after"), now) ??
-              (Number.isFinite(reset) && reset > now ? reset : undefined);
-            return yield* new GitHubCliRateLimitError({
-              ...context,
-              ...(retryAt === undefined ? {} : { retryAt }),
-            });
-          }
-          if (status === "401") return yield* new GitHubCliAuthenticationError(context);
-          return yield* new GitHubCliCommandError({
-            ...context,
-            ...(status === undefined ? {} : { httpStatus: Number(status) }),
-          });
-        }
-      }
-      return result;
-    },
-  );
 
   const gitRead = (cwd: string, args: ReadonlyArray<string>) =>
     process.run({
@@ -1170,7 +1037,6 @@ export const make = Effect.gen(function* () {
   });
 
   return GitHubCli.of({
-    execute,
     listPullRequestsByHead: (input) =>
       AllowGitHubReserve.pipe(
         Effect.flatMap((allowReserve) => listByHead({ ...input, allowReserve })),

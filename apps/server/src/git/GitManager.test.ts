@@ -384,7 +384,11 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
   );
   const ghCalls: string[] = [];
 
-  const execute: GitHubCli.GitHubCli["Service"]["execute"] = (input) => {
+  // The fake still speaks in gh's command shapes; the service methods below translate to them.
+  const execute = (input: {
+    readonly cwd: string;
+    readonly args: ReadonlyArray<string>;
+  }): Effect.Effect<VcsProcess.VcsProcessOutput, GitHubCli.GitHubCliError> => {
     const args = [...input.args];
     ghCalls.push(args.join(" "));
 
@@ -519,7 +523,6 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
 
   return {
     service: {
-      execute,
       // The fake answers the CLI shape, so batched lookups read it the way the fallback does.
       listPullRequestsByHead: (input) =>
         execute({

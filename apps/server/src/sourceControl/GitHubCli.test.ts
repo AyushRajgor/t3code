@@ -34,6 +34,7 @@ const restResponse = (body: unknown, status = 200): GitHubApi.GitHubRestResponse
   headers: {},
   body: body === undefined ? "" : encodeJson(body),
   truncated: false,
+  invalidUtf8: false,
 });
 
 const node = (number: number, headRefName: string, owner = "acme") => ({

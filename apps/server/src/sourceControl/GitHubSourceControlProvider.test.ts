@@ -43,6 +43,7 @@ const restResponse = (body: string): GitHubApi.GitHubRestResponse => ({
   headers: {},
   body,
   truncated: false,
+  invalidUtf8: false,
 });
 
 it.effect("maps GitHub PR summaries into provider-neutral change requests", () =>
