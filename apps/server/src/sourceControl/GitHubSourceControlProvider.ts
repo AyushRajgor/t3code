@@ -9,6 +9,8 @@ import {
   type SourceControlProviderDiscoveryItem,
 } from "@t3tools/contracts";
 
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+
 import * as GitHubApi from "./GitHubApi.ts";
 import * as GitHubCli from "./GitHubCli.ts";
 import { findAuthenticatedGitHubAccount, parseGitHubAuthStatus } from "./gitHubAuthStatus.ts";
@@ -125,8 +127,8 @@ const decodeViewer = Schema.decodeUnknownOption(
 );
 
 /** The environment variable gh would take a github.com token from, if one is set. */
-function environmentTokenVariable(): string | null {
-  return ["GH_TOKEN", "GITHUB_TOKEN"].find((name) => globalThis.process.env[name]?.trim()) ?? null;
+function environmentTokenVariable(environment: NodeJS.ProcessEnv): string | null {
+  return ["GH_TOKEN", "GITHUB_TOKEN"].find((name) => environment[name]?.trim()) ?? null;
 }
 
 /**
@@ -136,6 +138,7 @@ function environmentTokenVariable(): string | null {
 export const makeDiscovery = Effect.gen(function* () {
   const api = yield* GitHubApi.GitHubApi;
   const process = yield* VcsProcess.VcsProcess;
+  const environment = yield* HostProcessEnvironment;
   return {
     type: "managed-cli",
     kind: discovery.kind,
@@ -143,7 +146,7 @@ export const makeDiscovery = Effect.gen(function* () {
     installHint: discovery.installHint,
     probe: Effect.fn("GitHubSourceControlProvider.discovery")(function* (cwd: string) {
       const cli = yield* probeSourceControlProvider({ cwd, process, spec: discovery });
-      const variable = environmentTokenVariable();
+      const variable = environmentTokenVariable(environment);
       if (variable === null) return cli;
       const viewer = yield* api
         .rest({ host: "github.com", operation: "discovery", path: "user" })
@@ -201,7 +204,7 @@ export const make = Effect.gen(function* () {
                   reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                     input.headSelector,
                   ),
-                  detail: error.detail,
+                  detail: error.message,
                   cause: error,
                 }),
             ),
@@ -240,7 +243,7 @@ export const make = Effect.gen(function* () {
                 reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                   input.headSelector,
                 ),
-                detail: error.detail,
+                detail: error.message,
                 cause: error,
               }),
           ),
@@ -318,7 +321,7 @@ export const make = Effect.gen(function* () {
                 reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                   input.reference,
                 ),
-                detail: error.detail,
+                detail: error.message,
                 cause: error,
               }),
           ),
@@ -343,7 +346,7 @@ export const make = Effect.gen(function* () {
                 reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                   input.headSelector,
                 ),
-                detail: error.detail,
+                detail: error.message,
                 cause: error,
               }),
           ),
@@ -360,7 +363,7 @@ export const make = Effect.gen(function* () {
               repository: SourceControlProvider.transportSafeSourceControlErrorValue(
                 input.repository,
               ),
-              detail: error.detail,
+              detail: error.message,
               cause: error,
             }),
         ),
@@ -377,7 +380,7 @@ export const make = Effect.gen(function* () {
               repository: SourceControlProvider.transportSafeSourceControlErrorValue(
                 input.repository,
               ),
-              detail: error.detail,
+              detail: error.message,
               cause: error,
             }),
         ),
@@ -398,7 +401,7 @@ export const make = Effect.gen(function* () {
                 operation: "getDefaultBranch",
                 command: error.command,
                 cwd: input.cwd,
-                detail: error.detail,
+                detail: error.message,
                 cause: error,
               }),
           ),
@@ -415,7 +418,7 @@ export const make = Effect.gen(function* () {
               reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                 input.reference,
               ),
-              detail: error.detail,
+              detail: error.message,
               cause: error,
             }),
         ),
