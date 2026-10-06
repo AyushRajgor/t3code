@@ -356,6 +356,18 @@ function restCallsTo(needle: string): ReadonlyArray<GitHubApi.GitHubRestInput> {
   );
 }
 
+/**
+ * The check that a client-given node hangs off the pull request it names. Routed before the node
+ * id lookup, whose document it contains.
+ */
+const SUBJECT_SCOPE_QUERY = "node(id: $subjectId)";
+const subjectScope = (subjectId: string, pullRequestId: string) => ({
+  data: {
+    repository: { pullRequest: { id: pullRequestId } },
+    node: { id: subjectId, pullRequest: { id: pullRequestId } },
+  },
+});
+
 /** A pull request's base and head, as the REST read a file expansion starts from answers them. */
 const pullRequestRefs = encodeJson({ base: { sha: "a1b2c3d" }, head: { sha: "b1c2d3e" } });
 
@@ -3201,8 +3213,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("sends a whole review as one request body over stdin", () =>
+  it.effect("sends a whole review as one request", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
@@ -3217,28 +3228,23 @@ layer("GitHubPullRequestCli.layer", (it) => {
         comments: [{ path: "src/a.ts", position: { kind: "added", newLine: 4 }, body: "nit" }],
       });
 
-      expect(callAt(0).args).toEqual([
-        "api",
-        "--method",
-        "POST",
-        "--hostname",
-        "github.com",
-        "repos/acme/web/pulls/7/reviews",
-        "--input",
-        "-",
-      ]);
       // One request, so nothing is on the pull request until the verdict is.
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
-      expect(decodeJson(callAt(0).stdin ?? "")).toEqual({
-        event: "APPROVE",
-        body: "Looks right.",
-        comments: [{ path: "src/a.ts", line: 4, side: "RIGHT", body: "nit" }],
-      });
+      expect(restCallsTo("/reviews")).toMatchObject([
+        {
+          method: "POST",
+          path: "repos/acme/web/pulls/7/reviews",
+          body: {
+            event: "APPROVE",
+            body: "Looks right.",
+            comments: [{ path: "src/a.ts", line: 4, side: "RIGHT", body: "nit" }],
+          },
+        },
+      ]);
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("sends a reply body over stdin, never in argv", () =>
+  it.effect("sends a reply body as a variable, never inside the document", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
@@ -3251,27 +3257,14 @@ layer("GitHubPullRequestCli.layer", (it) => {
         body: "Fixed in 42ff8ec.",
       });
 
-      // A reply is the reader's own words, so it travels the same way a comment body does.
-      expect(callAt(0).args).toEqual([
-        "api",
-        "graphql",
-        "--hostname",
-        "github.com",
-        "--input",
-        "-",
+      expect(variablesOf("addPullRequestReviewThreadReply(")).toEqual([
+        { threadId: "PRRT_1", body: "Fixed in 42ff8ec." },
       ]);
-      const request = decodeJson(callAt(0).stdin ?? "") as {
-        query: string;
-        variables: Record<string, string>;
-      };
-      expect(request.query).toContain("addPullRequestReviewThreadReply");
-      expect(request.variables).toEqual({ threadId: "PRRT_1", body: "Fixed in 42ff8ec." });
-      expect(callAt(0).args.join(" ")).not.toContain("Fixed in 42ff8ec.");
+      expect(queryAt(0)).not.toContain("Fixed in 42ff8ec.");
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("resolves and unresolves through the mutation each one needs", () =>
+  it.effect("resolves and unresolves through the mutation each one needs", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
@@ -3291,57 +3284,36 @@ layer("GitHubPullRequestCli.layer", (it) => {
         resolved: false,
       });
 
-      const parse = (index: number) => decodeJson(callAt(index).stdin ?? "") as { query: string };
-      expect(parse(0).query).toContain("resolveReviewThread(");
-      expect(parse(1).query).toContain("unresolveReviewThread(");
+      expect(queryAt(0)).toContain("resolveReviewThread(");
+      expect(queryAt(0)).not.toContain("unresolveReviewThread(");
+      expect(queryAt(1)).toContain("unresolveReviewThread(");
+      expect([varsAt(0), varsAt(1)]).toEqual([{ threadId: "PRRT_1" }, { threadId: "PRRT_1" }]);
       // A GitHub Enterprise thread is resolved on its own host, not on github.com.
-      expect(callAt(0).args).toContain("github.acme.dev");
+      expect([callAt(0).host, callAt(1).host]).toEqual(["github.acme.dev", "github.acme.dev"]);
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip(
-    "confirms a given subject belongs to the named pull request, then reacts to it",
-    () =>
-      Effect.gen(function* () {
-        mockedExecute.mockReturnValueOnce(
-          Effect.succeed(
-            output(
-              encodeJson({
-                data: {
-                  repository: { pullRequest: { id: "PR_kwDOA" } },
-                  node: { id: "IC_1", pullRequest: { id: "PR_kwDOA" } },
-                },
-              }),
-            ),
-          ),
-        );
-        mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
-        const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+  it.effect("confirms a given subject belongs to the named pull request, then reacts to it", () =>
+    Effect.gen(function* () {
+      route([SUBJECT_SCOPE_QUERY, subjectScope("IC_1", "PR_kwDOA")]);
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
-        yield* cli.setReaction({
-          cwd: "/w",
-          repository: "acme/web",
-          host: "github.com",
-          number: 7,
-          subjectId: "IC_1",
-          content: "heart",
-          reacted: true,
-        });
+      yield* cli.setReaction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        subjectId: "IC_1",
+        content: "heart",
+        reacted: true,
+      });
 
-        assert.strictEqual(mockedExecute.mock.calls.length, 2);
-        const scopeCheck = callAt(0).args;
-        expect(scopeCheck).toContain("owner=acme");
-        expect(scopeCheck).toContain("name=web");
-        expect(scopeCheck).toContain("number=7");
-        expect(scopeCheck).toContain("subjectId=IC_1");
-        const request = decodeJson(callAt(1).stdin ?? "") as {
-          query: string;
-          variables: Record<string, string>;
-        };
-        expect(request.query).toContain("addReaction(");
-        expect(request.variables).toEqual({ subjectId: "IC_1", content: "HEART" });
-      }),
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      expect(variablesOf(SUBJECT_SCOPE_QUERY)).toEqual([
+        { owner: "acme", name: "web", number: 7, subjectId: "IC_1" },
+      ]);
+      expect(variablesOf("addReaction(")).toEqual([{ subjectId: "IC_1", content: "HEART" }]);
+    }),
   );
 
   it.effect("refuses a given subject that belongs to a different pull request", () =>
@@ -3380,15 +3352,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("looks up the pull request's own node id when no subject was given", () =>
+  it.effect("looks up the pull request's own node id when no subject was given", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(encodeJson({ data: { repository: { pullRequest: { id: "PR_kwDOA" } } } })),
-        ),
-      );
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
+      route([NODE_ID_QUERY, nodeIdAnswer("PR_kwDOA")]);
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       // Its own pull request: a node id looked up once is remembered for the life of the service.
@@ -3402,35 +3368,14 @@ layer("GitHubPullRequestCli.layer", (it) => {
       });
 
       assert.strictEqual(mockedExecute.mock.calls.length, 2);
-      const lookup = callAt(0).args;
-      expect(lookup).toContain("owner=acme");
-      expect(lookup).toContain("name=web");
-      expect(lookup).toContain("number=21");
-      const request = decodeJson(callAt(1).stdin ?? "") as {
-        query: string;
-        variables: Record<string, string>;
-      };
-      expect(request.query).toContain("addReaction(");
-      expect(request.variables).toEqual({ subjectId: "PR_kwDOA", content: "ROCKET" });
+      expect(variablesOf(NODE_ID_QUERY)).toEqual([{ owner: "acme", name: "web", number: 21 }]);
+      expect(variablesOf("addReaction(")).toEqual([{ subjectId: "PR_kwDOA", content: "ROCKET" }]);
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("takes a reaction back through the remove mutation", () =>
+  it.effect("takes a reaction back through the remove mutation", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            encodeJson({
-              data: {
-                repository: { pullRequest: { id: "PR_kwDOA" } },
-                node: { id: "IC_1", pullRequest: { id: "PR_kwDOA" } },
-              },
-            }),
-          ),
-        ),
-      );
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
+      route([SUBJECT_SCOPE_QUERY, subjectScope("IC_1", "PR_kwDOA")]);
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       yield* cli.setReaction({
@@ -3443,19 +3388,14 @@ layer("GitHubPullRequestCli.layer", (it) => {
         reacted: false,
       });
 
-      const request = decodeJson(callAt(1).stdin ?? "") as { query: string };
-      expect(request.query).toContain("removeReaction(");
+      expect(variablesOf("removeReaction(")).toEqual([{ subjectId: "IC_1", content: "HEART" }]);
+      expect(variablesOf("addReaction(")).toEqual([]);
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("rewrites only the words a request named", () =>
+  it.effect("rewrites only the words a request named", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValue(
-        Effect.succeed(
-          output(encodeJson({ data: { repository: { pullRequest: { id: "PR_kwDOA" } } } })),
-        ),
-      );
+      route([NODE_ID_QUERY, nodeIdAnswer("PR_kwDOA")]);
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
       const rewrite = (fields: { readonly title?: string; readonly body?: string }) =>
         cli.updatePullRequest({
@@ -3471,38 +3411,18 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* rewrite({ title: "Both", body: "at once." });
 
       // One node id lookup for the pull request, then a mutation per rewrite.
-      const variablesAt = (index: number) =>
-        (decodeJson(callAt(index).stdin ?? "") as { variables: Record<string, string> }).variables;
-      expect(variablesAt(1)).toEqual({ pullRequestId: "PR_kwDOA", title: "A better title" });
-      expect(variablesAt(2)).toEqual({
-        pullRequestId: "PR_kwDOA",
-        body: "A better description.",
-      });
-      expect(variablesAt(3)).toEqual({
-        pullRequestId: "PR_kwDOA",
-        title: "Both",
-        body: "at once.",
-      });
-      // The reader's own words, so they travel the way every other body does.
-      expect(callAt(3).args.join(" ")).not.toContain("at once.");
+      assert.strictEqual(variablesOf(NODE_ID_QUERY).length, 1);
+      expect(variablesOf("updatePullRequest(")).toEqual([
+        { pullRequestId: "PR_kwDOA", title: "A better title" },
+        { pullRequestId: "PR_kwDOA", body: "A better description." },
+        { pullRequestId: "PR_kwDOA", title: "Both", body: "at once." },
+      ]);
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("rewrites a remark through the mutation its kind needs", () =>
+  it.effect("rewrites a remark through the mutation its kind needs", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValue(
-        Effect.succeed(
-          output(
-            encodeJson({
-              data: {
-                repository: { pullRequest: { id: "PR_kwDOA" } },
-                node: { id: "IC_1", pullRequest: { id: "PR_kwDOA" } },
-              },
-            }),
-          ),
-        ),
-      );
+      route([SUBJECT_SCOPE_QUERY, subjectScope("IC_1", "PR_kwDOA")]);
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
       const rewrite = (kind: "issue-comment" | "review-comment") =>
         cli.updateComment({
@@ -3518,16 +3438,16 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* rewrite("issue-comment");
       yield* rewrite("review-comment");
 
-      const parse = (index: number) =>
-        decodeJson(callAt(index).stdin ?? "") as {
-          query: string;
-          variables: Record<string, string>;
-        };
-      expect(callAt(0).args).toContain("subjectId=IC_1");
-      expect(parse(1).query).toContain("updateIssueComment(");
-      expect(parse(1).variables).toEqual({ commentId: "IC_1", body: "Reworded." });
-      expect(parse(3).query).toContain("updatePullRequestReviewComment(");
-      expect(parse(3).variables).toEqual({ commentId: "IC_1", body: "Reworded." });
+      expect(variablesOf(SUBJECT_SCOPE_QUERY).map((variables) => variables["subjectId"])).toEqual([
+        "IC_1",
+        "IC_1",
+      ]);
+      expect(variablesOf("updateIssueComment(")).toEqual([
+        { commentId: "IC_1", body: "Reworded." },
+      ]);
+      expect(variablesOf("updatePullRequestReviewComment(")).toEqual([
+        { commentId: "IC_1", body: "Reworded." },
+      ]);
     }),
   );
 
