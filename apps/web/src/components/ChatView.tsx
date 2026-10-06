@@ -259,6 +259,7 @@ import { previewRuntimeTabId } from "../browser/previewRuntimeTabId";
 import { addBrowserSurface } from "./preview/addBrowserSurface";
 import { closePreviewSession } from "./preview/closePreviewSession";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
+import { selectLatestComputerUse } from "./preview/computerUsePreview";
 import { usePreviewSession } from "./preview/usePreviewSession";
 import { subscribePreviewAction } from "./preview/previewActionBus";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
@@ -266,6 +267,7 @@ import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 import {
   browserMiniPlayerSource,
   previewMiniPlayerSourceKey,
+  COMPUTER_MINI_PLAYER_SOURCE,
   selectThreadPreviewMiniPlayer,
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
@@ -5368,6 +5370,24 @@ export default function ChatView(props: ChatViewProps) {
     deviceState.sessions,
     deviceState.devices,
   ]);
+  // A computer use call floats the driven window over chat the way an
+  // agent-opened device does. Each new call reopens a card the user closed;
+  // a browser or device the agent already floats keeps its place.
+  const computerUse = useMemo(
+    () => selectLatestComputerUse(serverProjection?.turnItems ?? []),
+    [serverProjection?.turnItems],
+  );
+  const lastShownComputerUseItemId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeThreadRef || !computerUse?.inProgress || shouldUsePlanSidebarSheet) return;
+    if (lastShownComputerUseItemId.current === computerUse.itemId) return;
+    lastShownComputerUseItemId.current = computerUse.itemId;
+    if (!autoShowFloatingPreview) return;
+    const current =
+      usePreviewMiniPlayerStore.getState().byThreadKey[scopedThreadKey(activeThreadRef)];
+    if (current && current.source.kind !== "computer") return;
+    usePreviewMiniPlayerStore.getState().open(activeThreadRef, COMPUTER_MINI_PLAYER_SOURCE);
+  }, [activeThreadRef, autoShowFloatingPreview, computerUse, shouldUsePlanSidebarSheet]);
   // Baseline loaded tabs so reloads never reopen previews the user dismissed.
   const previousServerPreviewTabs = useRef(new Map<string, Map<string, string | undefined>>());
   useEffect(() => {
@@ -11525,6 +11545,7 @@ export default function ChatView(props: ChatViewProps) {
                 key={`${activeThreadKey}:${previewMiniPlayerSourceKey(activePreviewMiniPlayer.source)}`}
                 threadRef={activeThreadRef}
                 miniPlayer={activePreviewMiniPlayer}
+                computerUse={computerUse}
               />
             ) : null}
 
