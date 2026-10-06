@@ -5,17 +5,12 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as PlatformError from "effect/PlatformError";
 import * as Request from "effect/Request";
 import * as RequestResolver from "effect/RequestResolver";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-import {
-  TrimmedNonEmptyString,
-  type SourceControlRepositoryVisibility,
-  type VcsError,
-} from "@t3tools/contracts";
+import { TrimmedNonEmptyString, type SourceControlRepositoryVisibility } from "@t3tools/contracts";
 import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import {
@@ -35,9 +30,6 @@ import {
   decodeGitHubPullRequestEntries,
   type NormalizedGitHubPullRequestRecord,
 } from "./gitHubPullRequests.ts";
-
-/** Server-local credential scope; never put its value in RPC payloads or cache keys. */
-export const PinnedGitHubCredential = GitHubApi.PinnedGitHubCredential;
 
 export const AllowGitHubReserve = GitHubApi.AllowGitHubReserve;
 
@@ -149,40 +141,8 @@ export type GitHubCliError = typeof GitHubCliError.Type;
 
 export const isGitHubCliError = Schema.is(GitHubCliError);
 
-export function fromVcsError(
-  context: {
-    readonly command: "gh";
-    readonly cwd: string;
-  },
-  error: VcsError,
-): GitHubCliError {
-  if (
-    error._tag === "VcsProcessSpawnError" &&
-    error.cause instanceof PlatformError.PlatformError &&
-    error.cause.reason._tag === "NotFound" &&
-    error.cause.reason.module === "ChildProcess" &&
-    error.cause.reason.method === "spawn"
-  ) {
-    return new GitHubCliUnavailableError({ ...context, cause: error });
-  }
-
-  if (error._tag === "VcsProcessExitError") {
-    if (error.failureKind === "authentication") {
-      return new GitHubCliAuthenticationError({ ...context, cause: error });
-    }
-    if (error.failureKind === "rate-limited") {
-      return new GitHubCliRateLimitError({ ...context, cause: error });
-    }
-    if (error.failureKind === "not-found") {
-      return new GitHubPullRequestNotFoundError({ ...context, cause: error });
-    }
-  }
-
-  return new GitHubCliCommandError({ ...context, cause: error });
-}
-
 /** Maps a GitHub API failure onto the errors callers of this service already handle. */
-export function fromGitHubApiError(cwd: string, error: GitHubApi.GitHubApiError): GitHubCliError {
+function fromGitHubApiError(cwd: string, error: GitHubApi.GitHubApiError): GitHubCliError {
   const context = { command: "gh" as const, cwd, cause: error };
   switch (error._tag) {
     case "GitHubCliMissingError":
@@ -465,7 +425,7 @@ export interface GitHubRepositoryLocator {
 }
 
 /** `owner/name` or `host/owner/name`, as `gh --repo` and GH_REPO take them. */
-export function parseGitHubRepositorySelector(
+function parseGitHubRepositorySelector(
   selector: string,
   defaultHost: string,
 ): GitHubRepositoryLocator | null {
@@ -492,7 +452,7 @@ export function parseGitHubRepositorySelector(
  * A pull request reference the way `gh pr view` takes one: a number (`#7` too), a pull request
  * URL, or a branch name.
  */
-export function parsePullRequestReference(
+function parsePullRequestReference(
   reference: string,
 ):
   | { readonly kind: "number"; readonly number: number }
@@ -698,7 +658,8 @@ export const make = Effect.gen(function* () {
         request.owner,
         request.name,
         String(request.allowReserve),
-        Context.getOrElse(context, PinnedGitHubCredential, () => null)?.credentialFingerprint ?? "",
+        Context.getOrElse(context, GitHubApi.PinnedGitHubCredential, () => null)
+          ?.credentialFingerprint ?? "",
         Context.getOrElse(context, SourceControlRateLimit.CredentialScope, () => ""),
       ].join("\0"),
     resolver: (entries) => {
