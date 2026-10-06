@@ -356,6 +356,9 @@ function restCallsTo(needle: string): ReadonlyArray<GitHubApi.GitHubRestInput> {
   );
 }
 
+/** A pull request's base and head, as the REST read a file expansion starts from answers them. */
+const pullRequestRefs = encodeJson({ base: { sha: "a1b2c3d" }, head: { sha: "b1c2d3e" } });
+
 /** The pull request node id lookup, which the layer caches for every test after the first. */
 const NODE_ID_QUERY = "pullRequest(number: $number) { id }";
 const nodeIdAnswer = (id: string) => ({ data: { repository: { pullRequest: { id } } } });
@@ -2815,8 +2818,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("serves a diff GitHub hands over whole in one request, with no next slice", () =>
+  it.effect("serves a diff GitHub hands over whole in one request, with no next slice", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("diff --git a/a b/a")));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
@@ -2828,18 +2830,22 @@ layer("GitHubPullRequestCli.layer", (it) => {
         number: 7,
       });
 
+      assert.strictEqual(diff.patch, "diff --git a/a b/a");
       assert.isNull(diff.nextCursor);
       assert.isFalse(diff.truncated);
       // The common case pays for one request and not the files API on top of it.
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
-      // `--patch` asks gh for a format-patch stream, which repeats a file once per commit.
-      // The review needs GitHub's combined pull-request diff: one section per changed file.
-      expect(callAt(0).args).not.toContain("--patch");
+      // GitHub's combined pull-request diff: one section per changed file, not one per commit.
+      const call = callAt(0);
+      assert.strictEqual(call.kind, "rest");
+      if (call.kind === "rest") {
+        assert.strictEqual(call.path, "repos/acme/web/pulls/7");
+        assert.strictEqual(call.accept, "application/vnd.github.diff");
+      }
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("reads one files page when GitHub refuses the diff, and says it is the last", () =>
+  it.effect("reads one files page when GitHub refuses the diff, and says it is the last", () =>
     Effect.gen(function* () {
       // GitHub answers 406 rather than a diff past 300 changed files.
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
@@ -2858,10 +2864,8 @@ layer("GitHubPullRequestCli.layer", (it) => {
       assert.isNull(diff.nextCursor);
       expect(diff.patch).toContain("diff --git a/src/file1.ts b/src/file1.ts");
       expect(diff.patch).toContain("diff --git a/src/file2.ts b/src/file2.ts");
-      const args = callAt(1).args;
-      expect(args).toContain("--hostname");
-      expect(args).toContain("github.acme.dev");
-      expect(args).toContain("repos/acme/web/pulls/7/files?per_page=100&page=1");
+      assert.strictEqual(callAt(1).host, "github.acme.dev");
+      assert.strictEqual(pathAt(1), "repos/acme/web/pulls/7/files?per_page=100&page=1");
     }),
   );
 
@@ -2885,8 +2889,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("carries on from a cursor without asking `gh pr diff` again", () =>
+  it.effect("carries on from a cursor without asking for the whole diff again", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(100, 0))));
@@ -2902,7 +2905,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       expect(second.patch).toContain("diff --git a/src/file100.ts b/src/file100.ts");
       // The second slice is one request: the cursor already says where to read.
       assert.strictEqual(mockedExecute.mock.calls.length, 3);
-      expect(callAt(2).args).toContain("repos/acme/web/pulls/7/files?per_page=100&page=2");
+      assert.strictEqual(pathAt(2), "repos/acme/web/pulls/7/files?per_page=100&page=2");
     }),
   );
 
@@ -2925,39 +2928,38 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip(
-    "reads a named commit from the commit endpoint rather than from `gh pr diff`",
-    () =>
-      Effect.gen(function* () {
-        mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(2, 1))));
-        const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+  it.effect("reads a named commit from the commit endpoint rather than the whole diff", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output(`{"files":${pullRequestFiles(2, 1)}}`)),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
-        const diff = yield* cli.getPullRequestDiff({
-          cwd: "/w",
-          repository: "acme/web",
-          host: "github.com",
-          number: 7,
-          commit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
-        });
+      const diff = yield* cli.getPullRequestDiff({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        commit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+      });
 
-        // One request: the commit's own changes never take the `gh pr diff` road.
-        assert.strictEqual(mockedExecute.mock.calls.length, 1);
-        assert.isNull(diff.nextCursor);
-        expect(diff.patch).toContain("diff --git a/src/file1.ts b/src/file1.ts");
-        const args = callAt(0).args;
-        expect(args).toContain(
-          "repos/acme/web/commits/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0?per_page=100&page=1",
-        );
-        // The commit endpoint wraps its files in an object, which jq unwraps for the decoder.
-        expect(args).toContain(".files // []");
-      }),
+      // One request: the commit's own changes never take the whole-diff road.
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      assert.isNull(diff.nextCursor);
+      // The commit endpoint wraps its files in an object, which the decoder unwraps.
+      expect(diff.patch).toContain("diff --git a/src/file1.ts b/src/file1.ts");
+      assert.strictEqual(
+        pathAt(0),
+        "repos/acme/web/commits/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0?per_page=100&page=1",
+      );
+    }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("pages inside a commit the way it pages the pull request's own files", () =>
+  it.effect("pages inside a commit the way it pages the pull request's own files", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(100, 0))));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output(`{"files":${pullRequestFiles(100, 0)}}`)),
+      );
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
       const target = {
         cwd: "/w",
@@ -2969,11 +2971,14 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       const first = yield* cli.getPullRequestDiff(target);
       assert.isNotNull(first.nextCursor);
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(4, 100))));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output(`{"files":${pullRequestFiles(4, 100)}}`)),
+      );
       const second = yield* cli.getPullRequestDiff({ ...target, cursor: first.nextCursor });
 
       assert.isNull(second.nextCursor);
-      expect(callAt(1).args).toContain("repos/acme/web/commits/a1b2c3d?per_page=100&page=2");
+      expect(second.patch).toContain("src/file100.ts");
+      assert.strictEqual(pathAt(1), "repos/acme/web/commits/a1b2c3d?per_page=100&page=2");
     }),
   );
 
@@ -2996,10 +3001,11 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("expands a new file from a root commit without requiring a parent", () =>
+  it.effect("expands a new file from a root commit without requiring a parent", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output("\ta1b2c3d\n")));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output(encodeJson({ sha: "a1b2c3d", parents: [] }))),
+      );
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("root contents\n")));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
@@ -3016,7 +3022,8 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       expect(contents).toEqual({ oldContents: "", newContents: "root contents\n" });
       assert.strictEqual(mockedExecute.mock.calls.length, 2);
-      expect(callAt(1).args.join(" ")).toContain("contents/src/root.ts?ref=a1b2c3d");
+      assert.strictEqual(pathAt(0), "repos/acme/web/commits/a1b2c3d");
+      assert.strictEqual(pathAt(1), "repos/acme/web/contents/src/root.ts?ref=a1b2c3d");
     }),
   );
 
@@ -3046,10 +3053,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("reports an oversized diff file with its path and reason", () =>
+  it.effect("reports an oversized diff file with its path and reason", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output("a1b2c3d\tb1c2d3e\n")));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestRefs)));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("partial", true)));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
@@ -3070,16 +3076,15 @@ layer("GitHubPullRequestCli.layer", (it) => {
         assert.strictEqual(error.path, "src/large.ts");
         assert.strictEqual(error.reason, "oversized");
       }
+      // A deleted file is read at the base revision only.
+      assert.strictEqual(pathAt(1), "repos/acme/web/contents/src/large.ts?ref=a1b2c3d");
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("reports undecodable diff file contents as binary", () =>
+  it.effect("reports undecodable diff file contents as binary", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output("a1b2c3d\tb1c2d3e\n")));
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(output("binary\uFFFDcontents", false, true)),
-      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestRefs)));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("binary�contents", false, true)));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const error = yield* Effect.flip(
@@ -3102,11 +3107,10 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("returns valid text containing a literal replacement character", () =>
+  it.effect("returns valid text containing a literal replacement character", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output("a1b2c3d\tb1c2d3e\n")));
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output("before\uFFFDafter")));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestRefs)));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("before�after")));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const contents = yield* cli.getPullRequestDiffFileContents({
@@ -3119,7 +3123,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         newPath: "docs/encoding.md",
       });
 
-      assert.strictEqual(contents.oldContents, "before\uFFFDafter");
+      assert.strictEqual(contents.oldContents, "before�after");
     }),
   );
 
@@ -3932,8 +3936,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("fails a files page too large to read rather than calling the diff whole", () =>
+  it.effect("fails a files page too large to read rather than calling the diff whole", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(1, 1), true)));
@@ -3951,14 +3954,13 @@ layer("GitHubPullRequestCli.layer", (it) => {
       // What matters is that it fails at all: an empty patch with no cursor would render as a
       // change with no files and report the rest of it as already read. The refusal that sent
       // the read down this road is the one reported, by design.
-      assert.strictEqual(error._tag, "GitHubCliCommandError");
+      assert.strictEqual(error, diffRefused);
     }),
   );
 
-  // TODO(gh-api): port to the GitHubApi mock (fixtures still answer in gh shapes).
-  it.effect.skip("pages an oversized patch by file rather than handing back a severed one", () =>
+  it.effect("pages an oversized patch by file rather than handing back a severed one", () =>
     Effect.gen(function* () {
-      // `gh pr diff` succeeded but its output was cut at a byte, which lands mid-file.
+      // The whole diff came back, but cut at a byte, which lands mid-file.
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output("diff --git a/a b/a\n@@ -1 +1 @@", true)),
       );
@@ -3973,8 +3975,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
       });
 
       // The severed patch is thrown away; what comes back is assembled from whole files.
-      expect(callAt(1).args.join(" ")).toContain("/pulls/7/files");
+      assert.strictEqual(pathAt(1), "repos/acme/web/pulls/7/files?per_page=100&page=1");
       expect(slice.patch).toContain("src/file1.ts");
+      expect(slice.patch).not.toContain("diff --git a/a b/a");
       assert.strictEqual(mockedExecute.mock.calls.length, 2);
     }),
   );
