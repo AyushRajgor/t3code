@@ -337,10 +337,7 @@ describe("GitHubCli.listPullRequestsByHead", () => {
         graphql: (input) =>
           Effect.fail(
             input.variables?.h0 === "missing"
-              ? new GitHubCredentials.GitHubCredentialUnavailableError({
-                  host: "github.com",
-                  reason: "cli-missing",
-                })
+              ? new GitHubCredentials.GitHubCliMissingError({ host: "github.com" })
               : new GitHubApi.GitHubApiRateLimitError({
                   host: "github.com",
                   operation: "x",

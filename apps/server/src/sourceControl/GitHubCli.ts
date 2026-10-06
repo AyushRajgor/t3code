@@ -219,10 +219,9 @@ export function fromVcsError(
 export function fromGitHubApiError(cwd: string, error: GitHubApi.GitHubApiError): GitHubCliError {
   const context = { command: "gh" as const, cwd, cause: error };
   switch (error._tag) {
-    case "GitHubCredentialUnavailableError":
-      return error.reason === "cli-missing"
-        ? new GitHubCliUnavailableError(context)
-        : new GitHubCliAuthenticationError(context);
+    case "GitHubCliMissingError":
+      return new GitHubCliUnavailableError(context);
+    case "GitHubNotSignedInError":
     case "GitHubApiAuthenticationError":
       return new GitHubCliAuthenticationError(context);
     case "GitHubApiRateLimitError":
