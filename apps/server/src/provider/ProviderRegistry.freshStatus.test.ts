@@ -194,4 +194,42 @@ describe("ProviderRegistry fresh status", () => {
       assert.strictEqual(yield* work.probeCount, 1);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("fresh status after catalog invalidation probes each selected instance once", () =>
+    Effect.gen(function* () {
+      const personal = yield* makeCachedInstance("claudeAgent", "personal@example.test", 10);
+      const work = yield* makeCachedInstance("claude_work", "work@example.test", 20);
+      const registry = yield* buildRegistry([personal.instance, work.instance]);
+      yield* personal.reportAccount("personal-new@example.test", 30);
+      yield* work.reportAccount("work-new@example.test", 40);
+
+      // Model refresh prepares the catalog and invalidates before reading status.
+      yield* work.instance.invalidateCaches!;
+      const targetedInput = {
+        instanceId: work.instance.instanceId,
+        fresh: true,
+        refreshModels: true,
+      };
+      assert.deepStrictEqual(
+        accountUsage(yield* registry.refreshInstance(targetedInput.instanceId, targetedInput)),
+        {
+          claudeAgent: { email: "personal@example.test", usedPercent: 10 },
+          claude_work: { email: "work-new@example.test", usedPercent: 40 },
+        },
+      );
+      assert.strictEqual(yield* personal.probeCount, 1);
+      assert.strictEqual(yield* work.probeCount, 2);
+
+      yield* work.reportAccount("work-later@example.test", 50);
+      yield* personal.instance.invalidateCaches!;
+      yield* work.instance.invalidateCaches!;
+      const allInput = { fresh: true, refreshModels: true };
+      assert.deepStrictEqual(accountUsage(yield* registry.refresh(undefined, allInput)), {
+        claudeAgent: { email: "personal-new@example.test", usedPercent: 30 },
+        claude_work: { email: "work-later@example.test", usedPercent: 50 },
+      });
+      assert.strictEqual(yield* personal.probeCount, 2);
+      assert.strictEqual(yield* work.probeCount, 3);
+    }).pipe(Effect.scoped),
+  );
 });

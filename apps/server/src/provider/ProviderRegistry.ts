@@ -93,7 +93,7 @@ export class ProviderRegistry extends Context.Service<
      */
     readonly refresh: (
       provider?: ProviderDriverKind,
-      options?: { readonly fresh?: boolean },
+      options?: { readonly fresh?: boolean | undefined },
     ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /**
@@ -105,7 +105,7 @@ export class ProviderRegistry extends Context.Service<
      */
     readonly refreshInstance: (
       instanceId: ProviderInstanceId,
-      options?: { readonly fresh?: boolean },
+      options?: { readonly fresh?: boolean | undefined },
     ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /**
@@ -699,7 +699,7 @@ export const layer = Layer.effect(
 
     const refreshOneSource = Effect.fn("refreshOneSource")(function* (
       providerSource: ProviderSnapshotSource,
-      options?: { readonly fresh?: boolean },
+      options?: { readonly fresh?: boolean | undefined },
     ) {
       if (options?.fresh) {
         const instance = yield* instanceRegistry.getInstance(providerSource.instanceId);
@@ -722,7 +722,9 @@ export const layer = Layer.effect(
     // Untargeted refreshes probe every live source, so any read-scoped client
     // can request them. Concurrent callers share one in-flight pass instead of
     // each starting their own set of provider processes.
-    const refreshAll = Effect.fn("refreshAll")(function* (options?: { readonly fresh?: boolean }) {
+    const refreshAll = Effect.fn("refreshAll")(function* (options?: {
+      readonly fresh?: boolean | undefined;
+    }) {
       const claimed = yield* Ref.modify(
         refreshAllInFlightRef,
         (
@@ -762,7 +764,7 @@ export const layer = Layer.effect(
 
     const refresh = Effect.fn("refresh")(function* (
       provider?: ProviderDriverKind,
-      options?: { readonly fresh?: boolean },
+      options?: { readonly fresh?: boolean | undefined },
     ) {
       if (provider === undefined) {
         return yield* refreshAll(options);
@@ -781,7 +783,7 @@ export const layer = Layer.effect(
 
     const refreshInstance = Effect.fn("refreshInstance")(function* (
       instanceId: ProviderInstanceId,
-      options?: { readonly fresh?: boolean },
+      options?: { readonly fresh?: boolean | undefined },
     ) {
       const sources = yield* getLiveSources;
       const providerSource = sources.find((candidate) => candidate.instanceId === instanceId);
@@ -1135,10 +1137,14 @@ export const layer = Layer.effect(
 
     return {
       getProviders: Ref.get(providersRef),
-      refresh: (provider?: ProviderDriverKind, options?: { readonly fresh?: boolean }) =>
-        refresh(provider, options).pipe(Effect.catchCause(recoverRefreshFailure)),
-      refreshInstance: (instanceId: ProviderInstanceId, options?: { readonly fresh?: boolean }) =>
-        refreshInstance(instanceId, options).pipe(Effect.catchCause(recoverRefreshFailure)),
+      refresh: (
+        provider?: ProviderDriverKind,
+        options?: { readonly fresh?: boolean | undefined },
+      ) => refresh(provider, options).pipe(Effect.catchCause(recoverRefreshFailure)),
+      refreshInstance: (
+        instanceId: ProviderInstanceId,
+        options?: { readonly fresh?: boolean | undefined },
+      ) => refreshInstance(instanceId, options).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshWorkspaceSnapshot: (input) =>
         refreshWorkspaceSnapshot(input).pipe(Effect.catchCause(recoverRefreshFailure)),
       getProviderMaintenanceCapabilitiesForInstance,

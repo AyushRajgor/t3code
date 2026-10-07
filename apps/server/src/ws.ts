@@ -2195,12 +2195,8 @@ const layerWsRpc = (
                   fresh: input.fresh === true,
                 })
               : input.instanceId !== undefined
-                ? providerRegistry.refreshInstance(input.instanceId, {
-                    fresh: input.fresh === true && !input.refreshModels,
-                  })
-                : providerRegistry.refresh(undefined, {
-                    fresh: input.fresh === true && !input.refreshModels,
-                  });
+                ? providerRegistry.refreshInstance(input.instanceId, input)
+                : providerRegistry.refresh(undefined, input);
             if (input.refreshModels) {
               const instances = yield* providerInstances.listInstances;
               for (const instance of instances) {
