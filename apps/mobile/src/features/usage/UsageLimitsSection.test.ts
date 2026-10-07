@@ -50,6 +50,34 @@ beforeEach(() => {
   state.refreshProviders.mockReset();
 });
 
+it("requests a fresh limits read manually while automatic checks retain their caches", async () => {
+  const environmentId = EnvironmentId.make("mobile-limits-fresh");
+  state.presentations = new Map([
+    [
+      environmentId,
+      {
+        connection: { phase: "connected" },
+        entry: { target: { label: "Local" } },
+      },
+    ],
+  ]);
+  state.refreshProviders.mockResolvedValue({ _tag: "Success" });
+  const read = () => {
+    state.cursor = 0;
+    return useRefreshLimits();
+  };
+  read();
+  await state.autoRefresh();
+  expect(state.refreshProviders).toHaveBeenLastCalledWith({ environmentId, input: {} });
+
+  await read().refresh();
+  expect(state.refreshProviders).toHaveBeenCalledTimes(2);
+  expect(state.refreshProviders).toHaveBeenLastCalledWith({
+    environmentId,
+    input: { fresh: true },
+  });
+});
+
 it("keeps a newer environment failure when an older refresh finishes", async () => {
   const a = EnvironmentId.make("mobile-limits-a");
   const b = EnvironmentId.make("mobile-limits-b");
