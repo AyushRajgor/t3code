@@ -325,7 +325,7 @@ export function useRefreshLimits(
         connected.map(async ([environmentId, presentation]) => {
           const result = await refreshUsageLimits(
             environmentId,
-            () => refreshProviders({ environmentId, input: {} }),
+            () => refreshProviders({ environmentId, input: automatic ? {} : { fresh: true } }),
             automatic,
             afterPending,
           );

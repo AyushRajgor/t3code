@@ -168,7 +168,7 @@ it.each([0, 1])(
     });
     expect(state.refreshProviders).toHaveBeenCalledWith({
       environmentId: `test-${environmentNumber}`,
-      input: {},
+      input: { fresh: true },
     });
     expect(
       JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
@@ -213,6 +213,10 @@ it("refreshes once on opening Limits and suppresses rapid returns and remounts",
       .props.onValueChange([metric]);
   await act(() => selectMetric("limits"));
   expect(state.refreshProviders).toHaveBeenCalledTimes(1);
+  expect(state.refreshProviders).toHaveBeenLastCalledWith({
+    environmentId: `test-${environmentNumber}`,
+    input: {},
+  });
   await act(() => selectMetric("tokens"));
   await act(() => selectMetric("limits"));
   await act(() => renderer.unmount());
