@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 
-import { claudeRateLimitEventToUpdate, claudeUsageResponseToLimits } from "./claudeUsageLimits.ts";
+import {
+  claudeRateLimitEventToUpdate,
+  claudeUsageResponseToLimits,
+  recordClaudeUsageResponse,
+} from "./claudeUsageLimits.ts";
+import { applyUsageLimitsUpdate, resolveUsageLimitsAfterProbe } from "./providerUsageLimits.ts";
 
 const checkedAt = "2026-07-18T10:00:00.000Z";
 const noNames = { overageIncluded: undefined } as const;
@@ -94,6 +101,64 @@ describe("claudeUsageResponseToLimits", () => {
       }).limits,
     ).toEqual({ checkedAt, windows: [], unavailable: { reason: "unsupported" } });
   });
+
+  it("reports unreadable subscription limits as a recoverable failure", () => {
+    const { limits } = claudeUsageResponseToLimits({
+      checkedAt,
+      response: {
+        subscription_type: "max",
+        rate_limits_available: false,
+        rate_limits: null,
+      },
+    });
+    expect(limits.unavailable?.reason).toBe("probeFailed");
+    expect(limits.unavailable?.message).toBeTruthy();
+  });
+
+  it("preserves published windows and accepts live updates after an empty supported read", () => {
+    const published = claudeUsageResponseToLimits({
+      checkedAt,
+      response: {
+        rate_limits_available: true,
+        rate_limits: { five_hour: { utilization: 12, resets_at: null } },
+      },
+    }).limits;
+    const probed = claudeUsageResponseToLimits({
+      checkedAt,
+      response: { rate_limits_available: true, rate_limits: null },
+    }).limits;
+    expect(resolveUsageLimitsAfterProbe({ published, probed })).toBe(published);
+    const update = claudeRateLimitEventToUpdate(
+      { status: "allowed", rateLimitType: "five_hour", utilization: 0.2 },
+      noNames,
+    )!;
+    const recovered = applyUsageLimitsUpdate({ previous: probed, update, checkedAt });
+    expect(recovered?.unavailable).toBeUndefined();
+    expect(recovered?.windows).toMatchObject([{ id: "five_hour", usedPercent: 20 }]);
+  });
+
+  it.effect("keeps the scoped bucket identity when a subscription read fails", () =>
+    Effect.gen(function* () {
+      const names = yield* Ref.make({ overageIncluded: "Fable" as string | undefined });
+      yield* recordClaudeUsageResponse(names, {
+        checkedAt,
+        response: {
+          subscription_type: "max",
+          rate_limits_available: false,
+          rate_limits: null,
+        },
+      });
+      const update = claudeRateLimitEventToUpdate(
+        {
+          status: "allowed",
+          rateLimitType: "seven_day_overage_included" as never,
+          utilization: 0.4,
+        },
+        yield* Ref.get(names),
+      );
+      expect(update?.windows).toMatchObject([{ id: "seven_day_fable", usedPercent: 40 }]);
+    }),
+  );
 
   it("skips a window the endpoint reports without a utilization", () => {
     expect(

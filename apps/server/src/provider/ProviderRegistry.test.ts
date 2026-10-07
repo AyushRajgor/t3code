@@ -36,9 +36,11 @@ import { ChildProcessSpawner } from "effect/process";
 import { deepMerge } from "@t3tools/shared/Struct";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
+import { collectLimitAccounts, collectLimitNotices } from "@t3tools/shared/usageLimits";
 
 import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
+import { makeClaudeScopedLimitNames, type ClaudeUsageResponse } from "./claudeUsageLimits.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ModelManifest from "./ModelManifest.ts";
@@ -149,8 +151,10 @@ type TestClaudeCapabilities = {
   readonly email: string | undefined;
   readonly subscriptionType: string | undefined;
   readonly tokenSource: string | undefined;
+  readonly apiKeySource?: string | undefined;
   readonly apiProvider: string | undefined;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
+  readonly usage?: ClaudeUsageResponse;
 };
 
 function claudeCapabilities(overrides: Partial<TestClaudeCapabilities> = {}) {
@@ -210,6 +214,7 @@ function recordingMockSpawnerLayer(
   const commands: Array<{
     readonly args: ReadonlyArray<string>;
     readonly env: NodeJS.ProcessEnv | undefined;
+    readonly cwd: string | undefined;
   }> = [];
   const layer = Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
@@ -218,9 +223,10 @@ function recordingMockSpawnerLayer(
         args: ReadonlyArray<string>;
         options?: {
           readonly env?: NodeJS.ProcessEnv;
+          readonly cwd?: string;
         };
       };
-      commands.push({ args: cmd.args, env: cmd.options?.env });
+      commands.push({ args: cmd.args, env: cmd.options?.env, cwd: cmd.options?.cwd });
       return Effect.succeed(mockHandle(handler(cmd.args)));
     }),
   );
@@ -2978,6 +2984,401 @@ it.layer(
   // ── checkClaudeProviderStatus tests ──────────────────────────
 
   describe("checkClaudeProviderStatus", () => {
+    it.effect(
+      "does not authenticate empty SDK accounts when the configured CLI is signed out",
+      () =>
+        Effect.gen(function* () {
+          const homePath = "/tmp/t3code-claude-signed-out";
+          const recorded = recordingMockSpawnerLayer((args) => {
+            if (args.join(" ") === "--version") return { stdout: "2.1.292\n", stderr: "", code: 0 };
+            if (args.join(" ") === "auth status")
+              return {
+                stdout: '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}\n',
+                stderr: "",
+                code: 1,
+              };
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          });
+          for (const tokenSource of [undefined, "none"]) {
+            const status = yield* checkClaudeProviderStatus(
+              { ...defaultClaudeSettings, homePath },
+              claudeCapabilities({ tokenSource, apiProvider: "firstParty" }),
+            ).pipe(Effect.provide(recorded.layer));
+            assert.strictEqual(status.installed, true);
+            assert.strictEqual(status.auth.status, "unauthenticated");
+            assert.notStrictEqual(status.status, "ready");
+          }
+          assert.deepStrictEqual(
+            recorded.commands.map((command) => command.args.join(" ")),
+            ["--version", "auth status", "--version", "auth status"],
+          );
+          assert.deepStrictEqual(
+            recorded.commands.map((command) => command.env?.CLAUDE_CONFIG_DIR),
+            Array(4).fill((yield* Path.Path).resolve(homePath)),
+          );
+        }),
+    );
+
+    it.effect("recovers separate Claude account identities from each configured CLI login", () =>
+      Effect.gen(function* () {
+        const cwd = "/tmp/t3code-claude-fallback-project";
+        const accounts = [
+          { homePath: "/tmp/t3code-claude-work", email: "work@example.com", utilization: 10 },
+          { homePath: "/tmp/t3code-claude-work-max", email: "max@example.com", utilization: 70 },
+        ];
+        let authReads = 0;
+        const recorded = recordingMockSpawnerLayer((args) => {
+          if (args.join(" ") === "--version") return { stdout: "2.1.292\n", stderr: "", code: 0 };
+          if (args.join(" ") === "auth status") {
+            const account = accounts[authReads++];
+            if (!account) throw new Error("Unexpected Claude auth status request");
+            return {
+              stdout: JSON.stringify({
+                loggedIn: true,
+                authMethod: "claude.ai",
+                apiProvider: "firstParty",
+                email: account.email,
+                subscriptionType: "max",
+              }),
+              stderr: "",
+              code: 0,
+            };
+          }
+          throw new Error(`Unexpected args: ${args.join(" ")}`);
+        });
+        const providers: ServerProvider[] = [];
+        const path = yield* Path.Path;
+        for (const [index, account] of accounts.entries()) {
+          const status = yield* checkClaudeProviderStatus(
+            { ...defaultClaudeSettings, homePath: account.homePath },
+            claudeCapabilities({
+              tokenSource: "none",
+              apiProvider: "firstParty",
+              usage: {
+                rate_limits_available: true,
+                rate_limits: {
+                  five_hour: { utilization: account.utilization, resets_at: null },
+                },
+              },
+            }),
+            undefined,
+            cwd,
+          ).pipe(Effect.provide(recorded.layer));
+          assert.strictEqual(status.auth.status, "authenticated");
+          assert.strictEqual(status.auth.email, account.email);
+          assert.strictEqual(status.auth.label, "Claude Max Subscription");
+          providers.push({
+            ...status,
+            instanceId: ProviderInstanceId.make(`claude_work_${index}`),
+            driver: ProviderDriverKind.make("claudeAgent"),
+          });
+        }
+        assert.deepStrictEqual(
+          recorded.commands.map((command) => command.env?.CLAUDE_CONFIG_DIR),
+          accounts.flatMap((account) => [
+            path.resolve(account.homePath),
+            path.resolve(account.homePath),
+          ]),
+        );
+        assert.deepStrictEqual(
+          recorded.commands
+            .filter((command) => command.args.join(" ") === "auth status")
+            .map((command) => command.cwd),
+          Array(2).fill(cwd),
+        );
+        const presentations = new Map([
+          [
+            EnvironmentId.make("00000000-0000-4000-8000-000000000001"),
+            {
+              entry: { target: { label: "Local" } },
+              serverConfig: { providers },
+            },
+          ],
+        ]);
+        assert.deepStrictEqual(
+          collectLimitAccounts(presentations).map((account) => ({
+            email: account.email,
+            usedPercent: account.limits.windows[0]?.usedPercent,
+          })),
+          accounts.map((account) => ({ email: account.email, usedPercent: account.utilization })),
+        );
+      }),
+    );
+
+    it.effect("keeps authentication unknown when the CLI fallback response is malformed", () =>
+      Effect.gen(function* () {
+        const status = yield* checkClaudeProviderStatus(
+          defaultClaudeSettings,
+          claudeCapabilities({ tokenSource: "none", apiProvider: "firstParty" }),
+        );
+        assert.strictEqual(status.auth.status, "unknown");
+        assert.notStrictEqual(status.status, "ready");
+        assert.notInclude(status.message ?? "", "private-auth-payload");
+      }).pipe(
+        Effect.provide(
+          layerMockSpawner((args) => {
+            if (args.join(" ") === "--version") return { stdout: "2.1.292\n", stderr: "", code: 0 };
+            if (args.join(" ") === "auth status")
+              return { stdout: "private-auth-payload\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("does not trust authenticated CLI output after an unsuccessful auth command", () =>
+      Effect.gen(function* () {
+        const status = yield* checkClaudeProviderStatus(
+          defaultClaudeSettings,
+          claudeCapabilities({ tokenSource: "none", apiProvider: "firstParty" }),
+        );
+        assert.strictEqual(status.auth.status, "unknown");
+        assert.isUndefined(status.auth.email);
+        assert.notInclude(status.message ?? "", "private-auth-payload");
+      }).pipe(
+        Effect.provide(
+          layerMockSpawner((args) => {
+            if (args.join(" ") === "--version") return { stdout: "2.1.292\n", stderr: "", code: 0 };
+            if (args.join(" ") === "auth status")
+              return {
+                stdout: JSON.stringify({
+                  loggedIn: true,
+                  authMethod: "claude.ai",
+                  email: "work@example.com",
+                  subscriptionType: "max",
+                }),
+                stderr: "private-auth-payload\n",
+                code: 1,
+              };
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect(
+      "allows the auth probe budget and closes its process when authentication times out",
+      () =>
+        Effect.gen(function* () {
+          const authStarted = yield* Deferred.make<void>();
+          const killCalls = yield* Ref.make(0);
+          const layerAuthSpawner = Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) => {
+              const args = (command as unknown as { args: ReadonlyArray<string> }).args;
+              if (args.join(" ") === "--version")
+                return Effect.succeed(mockHandle({ stdout: "2.1.292\n", stderr: "", code: 0 }));
+              if (args.join(" ") !== "auth status")
+                return Effect.die(new Error(`Unexpected args: ${args.join(" ")}`));
+              return Effect.gen(function* () {
+                const handle = ChildProcessSpawner.makeHandle({
+                  pid: ChildProcessSpawner.ProcessId(1),
+                  exitCode: Effect.never,
+                  isRunning: Effect.succeed(true),
+                  kill: () => Ref.update(killCalls, (current) => current + 1),
+                  unref: Effect.succeed(Effect.void),
+                  stdin: Sink.drain,
+                  stdout: Stream.never,
+                  stderr: Stream.never,
+                  all: Stream.never,
+                  getInputFd: () => Sink.drain,
+                  getOutputFd: () => Stream.empty,
+                });
+                yield* Effect.addFinalizer(() => handle.kill().pipe(Effect.ignore));
+                yield* Deferred.succeed(authStarted, undefined);
+                return handle;
+              });
+            }),
+          );
+          const probe = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities({ tokenSource: "none", apiProvider: "firstParty" }),
+          ).pipe(Effect.provide(layerAuthSpawner), Effect.forkChild);
+          yield* Deferred.await(authStarted);
+          yield* TestClock.adjust("5 seconds");
+          assert.strictEqual(yield* Ref.get(killCalls), 0);
+          yield* TestClock.adjust("6 seconds");
+          const status = yield* Fiber.join(probe);
+          assert.strictEqual(status.auth.status, "unknown");
+          assert.notStrictEqual(status.status, "ready");
+          assert.strictEqual(yield* Ref.get(killCalls), 1);
+        }),
+    );
+
+    it.effect("recognizes an SDK API-key source without a subscription or CLI fallback", () =>
+      Effect.gen(function* () {
+        const status = yield* checkClaudeProviderStatus(
+          defaultClaudeSettings,
+          claudeCapabilities({ apiKeySource: "ANTHROPIC_API_KEY", apiProvider: "firstParty" }),
+        );
+        assert.strictEqual(status.auth.status, "authenticated");
+        assert.strictEqual(status.auth.type, "apiKey");
+        assert.strictEqual(status.auth.label, "Claude API Key");
+      }).pipe(
+        Effect.provide(
+          layerMockSpawner((args) => {
+            if (args.join(" ") === "--version") return { stdout: "2.1.292\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("keeps the Claude subscription label for an SDK OAuth API-key source", () =>
+      Effect.gen(function* () {
+        const status = yield* checkClaudeProviderStatus(
+          defaultClaudeSettings,
+          claudeCapabilities({
+            email: "work@example.com",
+            subscriptionType: "max",
+            apiKeySource: "oauth",
+            apiProvider: "firstParty",
+          }),
+        );
+        assert.strictEqual(status.auth.status, "authenticated");
+        assert.strictEqual(status.auth.type, "max");
+        assert.strictEqual(status.auth.label, "Claude Max Subscription");
+      }).pipe(
+        Effect.provide(
+          layerMockSpawner((args) => {
+            if (args.join(" ") === "--version") return { stdout: "2.1.292\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("keeps an authenticated subscription visible when its limits are unavailable", () =>
+      Effect.gen(function* () {
+        const scopedLimitNames = yield* makeClaudeScopedLimitNames;
+        const healthy = yield* checkClaudeProviderStatus(
+          defaultClaudeSettings,
+          claudeCapabilities({
+            email: "personal@example.com",
+            subscriptionType: "max",
+            tokenSource: "oauth",
+            usage: {
+              rate_limits_available: true,
+              rate_limits: { five_hour: { utilization: 20, resets_at: null } },
+            },
+          }),
+        );
+        const unavailable = yield* checkClaudeProviderStatus(
+          defaultClaudeSettings,
+          claudeCapabilities({
+            email: "work@example.com",
+            subscriptionType: "max",
+            tokenSource: "oauth",
+            usage: { rate_limits_available: false, rate_limits: null },
+          }),
+          undefined,
+          undefined,
+          undefined,
+          scopedLimitNames,
+        );
+        assert.strictEqual(unavailable.status, "ready");
+        assert.strictEqual(unavailable.auth.status, "authenticated");
+        assert.strictEqual(unavailable.auth.email, "work@example.com");
+        assert.strictEqual(unavailable.usageLimits?.unavailable?.reason, "probeFailed");
+        assert.isNotEmpty(unavailable.usageLimits?.unavailable?.message);
+
+        const driver = ProviderDriverKind.make("claudeAgent");
+        const presentations = new Map([
+          [
+            EnvironmentId.make("00000000-0000-4000-8000-000000000001"),
+            {
+              entry: { target: { label: "Local" } },
+              serverConfig: {
+                providers: [
+                  {
+                    ...healthy,
+                    instanceId: ProviderInstanceId.make("claude_personal"),
+                    driver,
+                    displayName: "Claude Personal",
+                  },
+                  {
+                    ...unavailable,
+                    instanceId: ProviderInstanceId.make("claude_work"),
+                    driver,
+                    displayName: "Claude Work",
+                  },
+                ],
+              },
+            },
+          ],
+        ]);
+        assert.deepStrictEqual(
+          collectLimitAccounts(presentations).map((account) => account.email),
+          ["personal@example.com"],
+        );
+        assert.deepStrictEqual(collectLimitNotices(presentations), [
+          `Claude Work: ${unavailable.usageLimits?.unavailable?.message}`,
+        ]);
+      }).pipe(
+        Effect.provide(
+          layerMockSpawner((args) => {
+            if (args.join(" ") === "--version") return { stdout: "2.1.291\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("leaves authenticated API-key and Bedrock accounts without limits unsupported", () =>
+      Effect.gen(function* () {
+        for (const authentication of [{ tokenSource: "apiKey" }, { apiProvider: "bedrock" }]) {
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities({
+              ...authentication,
+              usage: { rate_limits_available: false, rate_limits: null },
+            }),
+          );
+          assert.strictEqual(status.auth.status, "authenticated");
+          assert.strictEqual(status.usageLimits?.unavailable?.reason, "unsupported");
+        }
+      }).pipe(
+        Effect.provide(
+          layerMockSpawner((args) => {
+            if (args.join(" ") === "--version") return { stdout: "2.1.291\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("trusts explicit absent usage subscription over stale initialization metadata", () =>
+      Effect.gen(function* () {
+        const scopedLimitNames = yield* makeClaudeScopedLimitNames;
+        const status = yield* checkClaudeProviderStatus(
+          defaultClaudeSettings,
+          claudeCapabilities({
+            email: "work@example.com",
+            subscriptionType: "max",
+            tokenSource: "oauth",
+            usage: {
+              subscription_type: null,
+              rate_limits_available: false,
+              rate_limits: null,
+            },
+          }),
+          undefined,
+          undefined,
+          undefined,
+          scopedLimitNames,
+        );
+        assert.strictEqual(status.auth.status, "authenticated");
+        assert.strictEqual(status.usageLimits?.unavailable?.reason, "unsupported");
+      }).pipe(
+        Effect.provide(
+          layerMockSpawner((args) => {
+            if (args.join(" ") === "--version") return { stdout: "2.1.291\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+      ),
+    );
+
     it.effect("returns ready when claude is installed and authenticated", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus(
@@ -3187,7 +3588,7 @@ it.layer(
         // The home is resolved through the host Path before it reaches the env.
         assert.deepStrictEqual(
           recorded.commands.map((command) => command.env?.CLAUDE_CONFIG_DIR),
-          [(yield* Path.Path).resolve(claudeConfigDir)],
+          Array(2).fill((yield* Path.Path).resolve(claudeConfigDir)),
         );
       }).pipe(Effect.provide(recorded.layer));
     });

@@ -2276,8 +2276,8 @@ const layerWsRpc = (
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
             Effect.gen(function* () {
-              // Only explicit catalog refreshes bypass T3's caches. Workspace
-              // discovery and background status checks retain their timers.
+              // Explicit catalog refreshes rediscover models and maintenance
+              // ownership; status and workspace freshness are handled below.
               if (input.refreshModels) {
                 yield* modelManifest.forceRefresh;
                 const instances = yield* providerInstances.listInstances;
@@ -2312,8 +2312,12 @@ const layerWsRpc = (
                     fresh: input.fresh === true,
                   })
                 : input.instanceId !== undefined
-                  ? providerRegistry.refreshInstance(input.instanceId)
-                  : providerRegistry.refresh();
+                  ? providerRegistry.refreshInstance(input.instanceId, {
+                      fresh: input.fresh === true && !input.refreshModels,
+                    })
+                  : providerRegistry.refresh(undefined, {
+                      fresh: input.fresh === true && !input.refreshModels,
+                    });
               if (input.refreshModels) {
                 const instances = yield* providerInstances.listInstances;
                 for (const instance of instances) {

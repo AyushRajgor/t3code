@@ -30,6 +30,12 @@ import {
 const SESSION_MINS = 5 * 60;
 const WEEK_MINS = 7 * 24 * 60;
 
+export type ClaudeUsageResponse = Pick<
+  SDKControlGetUsageResponse,
+  "rate_limits_available" | "rate_limits"
+> &
+  Partial<Pick<SDKControlGetUsageResponse, "subscription_type">>;
+
 /**
  * The account-wide windows, keyed by the SDK's `rateLimitType`. Model-scoped
  * weeklies are additive on top of these: the CLI reports them under
@@ -155,13 +161,31 @@ export function claudeRateLimitEventToUpdate(
  * scoped-bucket names the response carried, for the event mapper to reuse.
  */
 export function claudeUsageResponseToLimits(input: {
-  readonly response: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
+  readonly response: ClaudeUsageResponse;
   readonly checkedAt: string;
+  readonly subscriptionType?: string | undefined;
 }): { readonly limits: ServerProviderUsageLimits; readonly names: ClaudeScopedLimitNames } {
   const { response, checkedAt } = input;
   if (!response.rate_limits_available || !response.rate_limits) {
+    // Missing profile scope also makes the SDK report unavailable limits.
+    // Its explicit null identifies an API/third-party session; older CLIs
+    // omit the field, so only then use the initialized account's plan.
+    const subscriptionType =
+      response.subscription_type === undefined
+        ? input.subscriptionType
+        : response.subscription_type;
+    const recoverable = response.rate_limits_available || Boolean(subscriptionType?.trim());
     return {
-      limits: makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" }),
+      limits: makeUnavailableUsageLimits({
+        checkedAt,
+        reason: recoverable ? "probeFailed" : "unsupported",
+        ...(recoverable
+          ? {
+              message:
+                "Claude did not report subscription limits. Check this account's Claude Code sign-in and usage access.",
+            }
+          : {}),
+      }),
       names: { overageIncluded: undefined },
     };
   }
@@ -195,5 +219,6 @@ export const recordClaudeUsageResponse = (
   input: Parameters<typeof claudeUsageResponseToLimits>[0],
 ): Effect.Effect<ServerProviderUsageLimits> => {
   const { limits, names } = claudeUsageResponseToLimits(input);
+  if (limits.unavailable?.reason === "probeFailed") return Effect.succeed(limits);
   return Ref.set(namesRef, names).pipe(Effect.as(limits));
 };
